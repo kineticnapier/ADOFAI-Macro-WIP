@@ -6,6 +6,8 @@ namespace ADOFAI_Macro.Scheduling;
 
 public sealed class InputEventBuilder
 {
+    private const double AngleTolerance = 0.0001;
+
     public IReadOnlyList<ScheduledInputEvent> Build(
         IReadOnlyList<ScheduledNote> notes,
         double normalHoldMs,
@@ -21,7 +23,9 @@ public sealed class InputEventBuilder
         foreach (ScheduledNote note in notes.OrderBy(n => n.TargetTick))
         {
             long downTick = note.TargetTick;
-            double holdMs = note.RelativeAngle == streamAngle ? streamHoldMs : normalHoldMs;
+            double holdMs = IsSameAngle(note.RelativeAngle, streamAngle)
+                ? streamHoldMs
+                : normalHoldMs;
             long upTick = downTick + MsToTicks(holdMs);
 
             if (pendingUps.TryGetValue(note.Key, out ScheduledInputEvent? previousUp))
@@ -85,5 +89,10 @@ public sealed class InputEventBuilder
     private static long MsToTicks(double ms)
     {
         return (long)Math.Round(ms * Stopwatch.Frequency / 1000.0);
+    }
+
+    private static bool IsSameAngle(double angle, int expectedAngle)
+    {
+        return Math.Abs(angle - expectedAngle) < AngleTolerance;
     }
 }

@@ -6,12 +6,14 @@ public sealed class ChartParser
 {
     public ParsedChart Parse(RawChart raw)
     {
+        IList<double> angleData = raw.AngleData as IList<double> ?? raw.AngleData.ToList();
+
         List<double> relativeAngles = AdofaiAngleConverter.ConvertToRelativeAngles(
-            (IList<double>)raw.AngleData,
+            angleData,
             raw.TwirlFloors);
 
         List<double> tileBpms = AdofaiBpmCalculator.BuildTileBpmList(
-            (IList<double>)raw.AngleData,
+            angleData,
             raw.InitialBpm,
             raw.SpeedEvents);
 
