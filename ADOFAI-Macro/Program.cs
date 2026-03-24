@@ -10,8 +10,9 @@ internal static class Program
 {
     static void Main(string[] args)
     {
-        string path = Console.ReadLine()
-            ?? throw new InvalidOperationException("No path provided.");
+        string path = args.Length > 0
+            ? args[0]
+            : Console.ReadLine() ?? throw new InvalidOperationException("No path provided.");
 
         MacroSettings settings = new();
 
