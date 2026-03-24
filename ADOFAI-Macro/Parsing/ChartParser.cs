@@ -1,0 +1,58 @@
+﻿using ADOFAI_Macro.Models;
+
+namespace ADOFAI_Macro.Parsing;
+
+public sealed class ChartParser
+{
+    public ParsedChart Parse(RawChart raw)
+    {
+        List<double> relativeAngles = AdofaiAngleConverter.ConvertToRelativeAngles(
+            (IList<double>)raw.AngleData,
+            raw.TwirlFloors);
+
+        List<double> tileBpms = AdofaiBpmCalculator.BuildTileBpmList(
+            (IList<double>)raw.AngleData,
+            raw.InitialBpm,
+            raw.SpeedEvents);
+
+        List<ChartNote> notes = BuildNotes(relativeAngles, tileBpms);
+
+        return new ParsedChart(relativeAngles, tileBpms, notes);
+    }
+
+    private static List<ChartNote> BuildNotes(
+        IReadOnlyList<double> relativeAngles,
+        IReadOnlyList<double> tileBpms)
+    {
+        if (relativeAngles.Count != tileBpms.Count)
+            throw new InvalidOperationException("relativeAngles and tileBpms count mismatch.");
+
+        List<ChartNote> notes = new(relativeAngles.Count);
+
+        if (relativeAngles.Count == 0)
+            return notes;
+
+        double currentTimeMs = 0.0;
+
+        // 最初のノーツ
+        notes.Add(new ChartNote(0, 0.0, relativeAngles[0]));
+
+        // 区間 i-1 を足してノーツ i を作る
+        for (int i = 1; i < relativeAngles.Count; i++)
+        {
+            double beats = relativeAngles[i - 1] / 180.0;
+            double msPerBeat = 60000.0 / tileBpms[i - 1];
+            double deltaMs = beats * msPerBeat;
+
+            currentTimeMs += deltaMs;
+
+            notes.Add(new ChartNote(
+                i,
+                currentTimeMs,
+                relativeAngles[i]
+            ));
+        }
+
+        return notes;
+    }
+}
