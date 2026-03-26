@@ -36,23 +36,22 @@ public sealed class ChartParser
 
         double currentTimeMs = 0.0;
 
-        // 最初のノーツ
-        notes.Add(new ChartNote(0, 0.0, relativeAngles[0]));
-
         // 区間 i-1 を足してノーツ i を作る
         for (int i = 1; i < relativeAngles.Count; i++)
         {
-            double beats = relativeAngles[i - 1] / 180.0;
-            double msPerBeat = 60000.0 / tileBpms[i - 1];
+            double beats = relativeAngles[i] / 180.0;
+            double msPerBeat = 60000.0 / tileBpms[i];
             double deltaMs = beats * msPerBeat;
 
-            currentTimeMs += deltaMs;
 
             notes.Add(new ChartNote(
                 i,
                 currentTimeMs,
                 relativeAngles[i]
             ));
+
+            currentTimeMs += deltaMs;
+
         }
 
         return notes;
