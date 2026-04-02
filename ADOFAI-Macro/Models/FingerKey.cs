@@ -9,5 +9,9 @@ public enum FingerKey
     P,
     Caret,
     Backslash,
-    Enter
+    Enter,
+    C,
+    Period,
+    LeftShift,
+    RightShift
 }

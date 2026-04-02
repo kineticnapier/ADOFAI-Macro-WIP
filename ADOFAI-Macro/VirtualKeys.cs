@@ -11,4 +11,8 @@ public static class VirtualKeys
     public const ushort ENTER = 0x0D;
     public const ushort OEM_7 = 0xDE;   // ^ に使う
     public const ushort OEM_5 = 0xDC;   // \ に使う
+    public const ushort C = 0x43;
+    public const ushort PERIOD = 0x40;
+    public const ushort LEFT_SHIFT = 0xA0;
+    public const ushort RIGHT_SHIFT = 0xA1;
 }

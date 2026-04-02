@@ -115,6 +115,10 @@ public sealed class WindowsInputBackend : IInputBackend
             FingerKey.Caret => VirtualKeys.OEM_7,
             FingerKey.Backslash => VirtualKeys.OEM_5,
             FingerKey.Enter => VirtualKeys.ENTER,
+            FingerKey.C => VirtualKeys.C,
+            FingerKey.Period => VirtualKeys.PERIOD,
+            FingerKey.LeftShift => VirtualKeys.LEFT_SHIFT,
+            FingerKey.RightShift => VirtualKeys.RIGHT_SHIFT,
             _ => throw new ArgumentOutOfRangeException(nameof(key))
         };
     }

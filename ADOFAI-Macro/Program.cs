@@ -16,12 +16,12 @@ internal static class Program
 
         MacroSettings settings = new();
 
-        KeyGroup keyGroup = new(
-            FingerKey.E,
-            FingerKey.P,
-            FingerKey.D2,
-            FingerKey.Caret
-        );
+        //KeyGroup keyGroup = new(
+        //    FingerKey.E,
+        //    FingerKey.P,
+        //    FingerKey.D2,
+        //    FingerKey.Caret
+        //);
 
         RawChart rawChart = new ChartLoader().Load(path);
         ParsedChart parsedChart = new ChartParser().Parse(rawChart);
@@ -35,13 +35,16 @@ internal static class Program
         //        settings.PseudoChordThreshold,
         //        settings.StreamAngle);
 
-        // 差し替え例
         IFingeringStrategy fingeringStrategy =
-            new SequentialFingeringStrategy(new[]
-            {
+            new SequentialFingeringStrategy(
+            [
+                 FingerKey.LeftShift,
                  FingerKey.Tab, FingerKey.D1, FingerKey.D2, FingerKey.E,
-                 FingerKey.P, FingerKey.Caret, FingerKey.Backslash, FingerKey.Enter
-            });
+                 FingerKey.C,
+                 FingerKey.Period,
+                 FingerKey.P, FingerKey.Caret, FingerKey.Backslash, FingerKey.Enter,
+                 FingerKey.RightShift
+            ]);
 
         // IFingeringStrategy fingeringStrategy =
         //     new PseudoChordFingeringStrategy(keyGroup, settings.PseudoChordThreshold);
@@ -51,7 +54,7 @@ internal static class Program
         IReadOnlyList<ScheduledNote> scheduledNotes =
             new ScheduleBuilder().Build(parsedChart.Notes, delayTable, fingering);
 
-        IReadOnlyList<ScheduledNote> autoNotes = scheduledNotes.Skip(1).ToList();
+        IReadOnlyList<ScheduledNote> autoNotes = [.. scheduledNotes.Skip(1)];
 
         IReadOnlyList<ScheduledInputEvent> inputEvents =
             new InputEventBuilder().Build(

@@ -48,6 +48,7 @@ public sealed class InputScheduler
             if (ev.Type == InputEventType.KeyDown)
             {
                 _backend.KeyDown(ev.Key);
+                Console.WriteLine($"KeyDown: {ev.Key} at tick {ev.TargetTick}");
             }
             else
             {
