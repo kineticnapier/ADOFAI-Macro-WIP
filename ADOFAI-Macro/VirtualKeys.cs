@@ -15,4 +15,6 @@ public static class VirtualKeys
     public const ushort PERIOD = 0x40;
     public const ushort LEFT_SHIFT = 0xA0;
     public const ushort RIGHT_SHIFT = 0xA1;
+    public const ushort LEFT_CONTROL = 0xA2;
+    public const ushort RIGHT_CONTROL = 0xA3;
 }

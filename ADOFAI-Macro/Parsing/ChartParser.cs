@@ -36,12 +36,14 @@ public sealed class ChartParser
 
         double currentTimeMs = 0.0;
 
-        // 区間 i-1 を足してノーツ i を作る
+        // ややこしいので変更しないで
+        // i=1から始めると、一番最初のタイルが無視され、そこを手動で補正するのでこれでよい
         for (int i = 1; i < relativeAngles.Count; i++)
         {
             double beats = relativeAngles[i] / 180.0;
             double msPerBeat = 60000.0 / tileBpms[i];
             double deltaMs = beats * msPerBeat;
+            currentTimeMs += deltaMs;
 
 
             notes.Add(new ChartNote(
@@ -50,7 +52,6 @@ public sealed class ChartParser
                 relativeAngles[i]
             ));
 
-            currentTimeMs += deltaMs;
 
         }
 

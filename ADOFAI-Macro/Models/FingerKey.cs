@@ -13,5 +13,7 @@ public enum FingerKey
     C,
     Period,
     LeftShift,
-    RightShift
+    RightShift,
+    LeftControl,
+    RightControl
 }

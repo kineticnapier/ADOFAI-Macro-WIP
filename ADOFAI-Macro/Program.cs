@@ -38,12 +38,10 @@ internal static class Program
         IFingeringStrategy fingeringStrategy =
             new SequentialFingeringStrategy(
             [
-                 FingerKey.LeftShift,
                  FingerKey.Tab, FingerKey.D1, FingerKey.D2, FingerKey.E,
-                 FingerKey.C,
-                 FingerKey.Period,
+                 FingerKey.RightControl,
                  FingerKey.P, FingerKey.Caret, FingerKey.Backslash, FingerKey.Enter,
-                 FingerKey.RightShift
+                 FingerKey.C, FingerKey.RightShift, FingerKey.LeftControl
             ]);
 
         // IFingeringStrategy fingeringStrategy =
@@ -54,17 +52,15 @@ internal static class Program
         IReadOnlyList<ScheduledNote> scheduledNotes =
             new ScheduleBuilder().Build(parsedChart.Notes, delayTable, fingering);
 
-        IReadOnlyList<ScheduledNote> autoNotes = [.. scheduledNotes.Skip(1)];
-
         IReadOnlyList<ScheduledInputEvent> inputEvents =
             new InputEventBuilder().Build(
-                autoNotes,
+                scheduledNotes,
                 settings.NormalHoldMs,
                 settings.StreamHoldMs,
                 settings.ReleaseLeadMs,
                 settings.StreamAngle);
 
-        Console.WriteLine("最初のタイルを手動で叩いて開始してください。");
+        Console.WriteLine("最初のタイルを手動で叩いて開始してください。(開始ははSpaceキー)");
         long startTick = new StartTrigger().WaitForFirstPress(VirtualKeys.SPACE);
 
         IInputBackend backend = new WindowsInputBackend();

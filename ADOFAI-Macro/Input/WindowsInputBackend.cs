@@ -119,6 +119,8 @@ public sealed class WindowsInputBackend : IInputBackend
             FingerKey.Period => VirtualKeys.PERIOD,
             FingerKey.LeftShift => VirtualKeys.LEFT_SHIFT,
             FingerKey.RightShift => VirtualKeys.RIGHT_SHIFT,
+            FingerKey.LeftControl => VirtualKeys.LEFT_CONTROL,
+            FingerKey.RightControl => VirtualKeys.RIGHT_CONTROL,
             _ => throw new ArgumentOutOfRangeException(nameof(key))
         };
     }
