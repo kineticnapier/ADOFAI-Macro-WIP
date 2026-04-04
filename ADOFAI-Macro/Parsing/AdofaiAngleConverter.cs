@@ -12,7 +12,7 @@ public static class AdofaiAngleConverter
         IReadOnlyList<PauseEvent> pauseEvents,
         IReadOnlyList<HoldEvent> holdEvents)
     {
-        HashSet<int> twirlSet = new(twirlIndices);
+        HashSet<int> twirlSet = [.. twirlIndices];
 
         Dictionary<int, double> pauseMap = pauseEvents
             .GroupBy(p => p.FloorIndex)
@@ -20,7 +20,7 @@ public static class AdofaiAngleConverter
 
         Dictionary<int, int> holdMap = BuildHoldMap(holdEvents);
 
-        List <double> result = new();
+        List <double> result = [];
         double prev = 0;
         bool twirled = false;
 
@@ -67,7 +67,7 @@ public static class AdofaiAngleConverter
 
     private static Dictionary<int, int> BuildHoldMap(IEnumerable<HoldEvent> holdEvents)
     {
-        Dictionary<int, int> map = new();
+        Dictionary<int, int> map = [];
         foreach (HoldEvent ev in holdEvents)
         {
             if (ev.Duration < 0)

@@ -4,9 +4,9 @@ namespace ADOFAI_Macro.Parsing;
 
 public sealed class ChartParser
 {
-    public ParsedChart Parse(RawChart raw)
+    public static ParsedChart Parse(RawChart raw)
     {
-        IList<double> angleData = raw.AngleData as IList<double> ?? raw.AngleData.ToList();
+        IList<double> angleData = raw.AngleData as IList<double> ?? [.. raw.AngleData];
 
         List<double> relativeAngles = AdofaiAngleConverter.ConvertToRelativeAngles(
             angleData,

@@ -55,11 +55,10 @@ internal static class Program
         //    FingerKey.Caret
         //);
 
-        RawChart rawChart = new ChartLoader().Load(path);
-        ParsedChart parsedChart = new ChartParser().Parse(rawChart);
+        RawChart rawChart = ChartLoader.Load(path);
+        ParsedChart parsedChart = ChartParser.Parse(rawChart);
 
-        IReadOnlyList<double> delayTable =
-            new DelayTableGenerator().Generate(parsedChart.Notes, settings.GlobalOffsetMs);
+        IReadOnlyList<double> delayTable = DelayTableGenerator.Generate(parsedChart.Notes, settings.GlobalOffsetMs);
 
         //IFingeringStrategy fingeringStrategy =
         //    new AdvancedFingeringStrategy(
@@ -91,10 +90,10 @@ internal static class Program
         IReadOnlyList<FingerKey> fingering = fingeringStrategy.Generate(parsedChart.Notes);
 
         IReadOnlyList<ScheduledNote> scheduledNotes =
-            new ScheduleBuilder().Build(parsedChart.Notes, delayTable, fingering);
+            ScheduleBuilder.Build(parsedChart.Notes, delayTable, fingering);
 
         IReadOnlyList<ScheduledInputEvent> inputEvents =
-            new InputEventBuilder().Build(
+            InputEventBuilder.Build(
                 scheduledNotes,
                 settings.NormalHoldMs,
                 settings.StreamHoldMs,
@@ -104,7 +103,7 @@ internal static class Program
         Console.WriteLine("最初のタイルを手動で叩いて開始してください。(開始はSpaceキー)");
         Console.WriteLine("再生中: ←で早める / →で遅らせる");
 
-        long startTick = new StartTrigger().WaitForFirstPress(VirtualKeys.SPACE);
+        long startTick = StartTrigger.WaitForFirstPress(VirtualKeys.SPACE);
 
         IInputBackend backend = new WindowsInputBackend();
         InputScheduler scheduler = new(backend);

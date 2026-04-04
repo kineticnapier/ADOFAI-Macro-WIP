@@ -2,21 +2,15 @@
 
 namespace ADOFAI_Macro.Fingering;
 
-public sealed class PseudoChordFingeringStrategy : IFingeringStrategy
+public sealed class PseudoChordFingeringStrategy(KeyGroup group, int pseudoChordThreshold = 30) : IFingeringStrategy
 {
-    private readonly KeyGroup _group;
-    private readonly int _pseudoChordThreshold;
-
-    public PseudoChordFingeringStrategy(KeyGroup group, int pseudoChordThreshold = 30)
-    {
-        _group = group;
-        _pseudoChordThreshold = pseudoChordThreshold;
-    }
+    private readonly KeyGroup _group = group;
+    private readonly int _pseudoChordThreshold = pseudoChordThreshold;
 
     public IReadOnlyList<FingerKey> Generate(IReadOnlyList<ChartNote> notes)
     {
         if (notes.Count == 0)
-            return Array.Empty<FingerKey>();
+            return [];
 
         FingerKey[] result = new FingerKey[notes.Count];
 

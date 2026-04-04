@@ -11,7 +11,7 @@ public static class AdofaiBpmCalculator
         double initialBpm,
         IEnumerable<SpeedEvent> speedEvents)
     {
-        List<double> result = new();
+        List<double> result = [];
         double currentBpm = initialBpm;
 
         Dictionary<int, List<SpeedEvent>> eventsByFloor = speedEvents

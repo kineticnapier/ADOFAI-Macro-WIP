@@ -4,7 +4,7 @@ namespace ADOFAI_Macro.Scheduling;
 
 public sealed class DelayTableGenerator
 {
-    public IReadOnlyList<double> Generate(
+    public static IReadOnlyList<double> Generate(
         IReadOnlyList<ChartNote> notes,
         double globalOffsetMs)
     {

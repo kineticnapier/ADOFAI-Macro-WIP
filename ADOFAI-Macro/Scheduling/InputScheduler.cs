@@ -7,15 +7,10 @@ using ADOFAI_Macro.Models;
 
 namespace ADOFAI_Macro.Scheduling;
 
-public sealed class InputScheduler
+public sealed class InputScheduler(IInputBackend backend)
 {
-    private readonly IInputBackend _backend;
+    private readonly IInputBackend _backend = backend;
     private long _manualOffsetTick = 0;
-
-    public InputScheduler(IInputBackend backend)
-    {
-        _backend = backend;
-    }
 
     public void PlayEventsFromBaseTick(
         IReadOnlyList<ScheduledInputEvent> events,

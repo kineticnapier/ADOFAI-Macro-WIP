@@ -1,15 +1,8 @@
 ﻿namespace ADOFAI_Macro.Models;
 
-public sealed class ScheduledInputEvent
+public sealed class ScheduledInputEvent(long targetTick, FingerKey key, InputEventType type)
 {
-    public long TargetTick { get; set; }
-    public FingerKey Key { get; }
-    public InputEventType Type { get; }
-
-    public ScheduledInputEvent(long targetTick, FingerKey key, InputEventType type)
-    {
-        TargetTick = targetTick;
-        Key = key;
-        Type = type;
-    }
+    public long TargetTick { get; set; } = targetTick;
+    public FingerKey Key { get; } = key;
+    public InputEventType Type { get; } = type;
 }

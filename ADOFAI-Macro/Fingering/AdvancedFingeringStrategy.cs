@@ -2,26 +2,19 @@
 
 namespace ADOFAI_Macro.Fingering;
 
-public sealed class AdvancedFingeringStrategy : IFingeringStrategy
+public sealed class AdvancedFingeringStrategy(
+    KeyGroup group,
+    int pseudoChordThreshold = 30,
+    int streamAngle = 45) : IFingeringStrategy
 {
-    private readonly KeyGroup _group;
-    private readonly int _pseudoChordThreshold;
-    private readonly int _streamAngle;
-
-    public AdvancedFingeringStrategy(
-        KeyGroup group,
-        int pseudoChordThreshold = 30,
-        int streamAngle = 45)
-    {
-        _group = group;
-        _pseudoChordThreshold = pseudoChordThreshold;
-        _streamAngle = streamAngle;
-    }
+    private readonly KeyGroup _group = group;
+    private readonly int _pseudoChordThreshold = pseudoChordThreshold;
+    private readonly int _streamAngle = streamAngle;
 
     public IReadOnlyList<FingerKey> Generate(IReadOnlyList<ChartNote> notes)
     {
         if (notes.Count == 0)
-            return Array.Empty<FingerKey>();
+            return [];
 
         FingerKey[] result = new FingerKey[notes.Count];
 

@@ -3,19 +3,13 @@ using System.Threading;
 
 namespace ADOFAI_Macro.Scheduling;
 
-public sealed class OffsetController
+public sealed class OffsetController(InputScheduler scheduler, double offsetStepMs = 1.0)
 {
-    private readonly InputScheduler _scheduler;
-    private readonly double _offsetStepMs;
+    private readonly InputScheduler _scheduler = scheduler;
+    private readonly double _offsetStepMs = offsetStepMs;
 
     private bool _leftWasDown = false;
     private bool _rightWasDown = false;
-
-    public OffsetController(InputScheduler scheduler, double offsetStepMs = 1.0)
-    {
-        _scheduler = scheduler;
-        _offsetStepMs = offsetStepMs;
-    }
 
     public void Run(CancellationToken cancellationToken = default)
     {

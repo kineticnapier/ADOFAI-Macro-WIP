@@ -8,7 +8,7 @@ public sealed class StartTrigger
     [DllImport("user32.dll")]
     private static extern short GetAsyncKeyState(int vKey);
 
-    public long WaitForFirstPress(int virtualKey)
+    public static long WaitForFirstPress(int virtualKey)
     {
         while (IsDown(virtualKey))
         {

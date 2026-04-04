@@ -7,7 +7,7 @@ namespace ADOFAI_Macro.Parsing;
 
 public sealed class ChartLoader
 {
-    public RawChart Load(string path)
+    public static RawChart Load(string path)
     {
         string rawText = File.ReadAllText(path);
         string text = SanitizeJson(rawText);
@@ -20,32 +20,26 @@ public sealed class ChartLoader
         JsonArray angleArray = obj["angleData"]?.AsArray()
             ?? throw new InvalidOperationException("angleData not found.");
 
-        List<double> angleData = angleArray
-            .Select(x => x?.GetValue<double>() ?? throw new InvalidOperationException("Invalid angleData item."))
-            .ToList();
+        List<double> angleData = [.. angleArray.Select(x => x?.GetValue<double>() ?? throw new InvalidOperationException("Invalid angleData item."))];
 
         JsonArray actions = obj["actions"]?.AsArray()
             ?? throw new InvalidOperationException("actions not found.");
 
-        List<int> twirlFloors = actions
+        List<int> twirlFloors = [.. actions
             .Where(x => x?["eventType"]?.GetValue<string>() == "Twirl")
-            .Select(x => x?["floor"]?.GetValue<int>() ?? throw new InvalidOperationException("Twirl floor missing."))
-            .ToList();
+            .Select(x => x?["floor"]?.GetValue<int>() ?? throw new InvalidOperationException("Twirl floor missing."))];
 
-        List<SpeedEvent> speedEvents = actions
+        List<SpeedEvent> speedEvents = [.. actions
             .Where(x => x?["eventType"]?.GetValue<string>() == "SetSpeed")
-            .Select(ParseSpeedEvent)
-            .ToList();
+            .Select(ParseSpeedEvent)];
 
-        List<PauseEvent> pauseEvents = actions
+        List<PauseEvent> pauseEvents = [.. actions
             .Where(x => x?["eventType"]?.GetValue<string>() == "Pause")
-            .Select(ParsePauseEvent)
-            .ToList();
+            .Select(ParsePauseEvent)];
 
-        List<HoldEvent> holdEvents = actions
+        List<HoldEvent> holdEvents = [.. actions
             .Where(x => x?["eventType"]?.GetValue<string>() == "Hold")
-            .Select(ParseHoldEvent)
-            .ToList();
+            .Select(ParseHoldEvent)];
 
         double initialBpm = obj["settings"]?["bpm"]?.GetValue<double>()
             ?? throw new InvalidOperationException("settings.bpm not found.");

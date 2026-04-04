@@ -6,7 +6,7 @@ namespace ADOFAI_Macro.Scheduling;
 
 public sealed class ScheduleBuilder
 {
-    public IReadOnlyList<ScheduledNote> Build(
+    public static IReadOnlyList<ScheduledNote> Build(
         IReadOnlyList<ChartNote> notes,
         IReadOnlyList<double> delayedMs,
         IReadOnlyList<FingerKey> fingering)

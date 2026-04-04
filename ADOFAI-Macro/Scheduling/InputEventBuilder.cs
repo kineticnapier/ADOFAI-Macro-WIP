@@ -8,7 +8,7 @@ public sealed class InputEventBuilder
 {
     private const double AngleTolerance = 0.0001;
 
-    public IReadOnlyList<ScheduledInputEvent> Build(
+    public static IReadOnlyList<ScheduledInputEvent> Build(
         IReadOnlyList<ScheduledNote> notes,
         double normalHoldMs,
         double streamHoldMs,
@@ -18,7 +18,7 @@ public sealed class InputEventBuilder
         long releaseLeadTicks = MsToTicks(releaseLeadMs);
 
         List<ScheduledInputEvent> events = new(notes.Count * 2);
-        Dictionary<FingerKey, ScheduledInputEvent> pendingUps = new();
+        Dictionary<FingerKey, ScheduledInputEvent> pendingUps = [];
 
         foreach (ScheduledNote note in notes.OrderBy(n => n.TargetTick))
         {
