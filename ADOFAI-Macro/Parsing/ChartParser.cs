@@ -11,7 +11,8 @@ public sealed class ChartParser
         List<double> relativeAngles = AdofaiAngleConverter.ConvertToRelativeAngles(
             angleData,
             raw.TwirlFloors,
-            raw.PauseEvents);
+            raw.PauseEvents,
+            raw.HoldEvents);
 
         List<double> tileBpms = AdofaiBpmCalculator.BuildTileBpmList(
             angleData,

@@ -5,5 +5,6 @@ public sealed record RawChart(
     IReadOnlyList<double> AngleData,
     IReadOnlyList<int> TwirlFloors,
     IReadOnlyList<SpeedEvent> SpeedEvents,
-    IReadOnlyList<PauseEvent> PauseEvents
+    IReadOnlyList<PauseEvent> PauseEvents,
+    IReadOnlyList<HoldEvent> HoldEvents
 );

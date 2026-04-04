@@ -1,5 +1,6 @@
 ﻿using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Threading;
 
 using ADOFAI_Macro.Input;
 using ADOFAI_Macro.Models;
@@ -9,13 +10,7 @@ namespace ADOFAI_Macro.Scheduling;
 public sealed class InputScheduler
 {
     private readonly IInputBackend _backend;
-
     private long _manualOffsetTick = 0;
-
-    private const double OffsetStepMs = 5.0;
-
-    private bool _leftWasDown = false;
-    private bool _rightWasDown = false;
 
     public InputScheduler(IInputBackend backend)
     {
@@ -24,89 +19,168 @@ public sealed class InputScheduler
 
     public void PlayEventsFromBaseTick(
         IReadOnlyList<ScheduledInputEvent> events,
-        long baseTick)
+        long baseTick,
+        CancellationToken cancellationToken = default)
     {
-        long frequency = Stopwatch.Frequency;
-        long spinThreshold = (long)(frequency * 0.0003);
-        long offsetStepTick = MsToTicks(OffsetStepMs, frequency);
+        IntPtr mmcssHandle = IntPtr.Zero;
 
-        foreach (ScheduledInputEvent ev in events)
+        try
         {
-            while (true)
+            PreparePlaybackThread();
+            mmcssHandle = EnterMmcss();
+
+            long frequency = Stopwatch.Frequency;
+
+            long dispatchAdvanceTick = MsToTicks(0.25, frequency);
+            long sleep0Threshold = MsToTicks(2.0, frequency);
+            long yieldThreshold = MsToTicks(0.5, frequency);
+            long tightSpinThreshold = MsToTicks(0.10, frequency);
+
+            foreach (ScheduledInputEvent ev in events)
             {
-                HandleManualOffsetInput(offsetStepTick);
-
-                long absoluteTarget = baseTick + ev.TargetTick + _manualOffsetTick;
-
-                long now = Stopwatch.GetTimestamp();
-                long remain = absoluteTarget - now;
-
-                if (remain <= 0)
+                while (true)
                 {
-                    break;
+                    if (cancellationToken.IsCancellationRequested)
+                        return;
+
+                    long offsetTick = Volatile.Read(ref _manualOffsetTick);
+                    long absoluteTarget = baseTick + ev.TargetTick + offsetTick - dispatchAdvanceTick;
+
+                    long now = Stopwatch.GetTimestamp();
+                    long remain = absoluteTarget - now;
+
+                    if (remain <= 0)
+                        break;
+
+                    if (remain > sleep0Threshold)
+                    {
+                        Thread.Sleep(0);
+                    }
+                    else if (remain > yieldThreshold)
+                    {
+                        Thread.Yield();
+                    }
+                    else if (remain > tightSpinThreshold)
+                    {
+                        Thread.SpinWait(8);
+                    }
+                    else
+                    {
+                        while (Stopwatch.GetTimestamp() < absoluteTarget)
+                        {
+                            if (cancellationToken.IsCancellationRequested)
+                                return;
+                        }
+                        break;
+                    }
                 }
 
-                if (remain > spinThreshold)
-                {
-                    Thread.SpinWait(64);
-                }
+                if (ev.Type == InputEventType.KeyDown)
+                    _backend.KeyDown(ev.Key);
                 else
-                {
-                    Thread.SpinWait(16);
-                }
+                    _backend.KeyUp(ev.Key);
             }
-
-            if (ev.Type == InputEventType.KeyDown)
+        }
+        finally
+        {
+            if (mmcssHandle != IntPtr.Zero)
             {
-                _backend.KeyDown(ev.Key);
-                Console.WriteLine($"KeyDown: {ev.Key} at tick {ev.TargetTick}");
-            }
-            else
-            {
-                _backend.KeyUp(ev.Key);
+                AvRevertMmThreadCharacteristics(mmcssHandle);
             }
         }
     }
 
-    private void HandleManualOffsetInput(long offsetStepTick)
+    public void AddOffsetMs(double deltaMs)
     {
-        bool leftDown = IsKeyDown(VK_LEFT);
-        bool rightDown = IsKeyDown(VK_RIGHT);
-
-        if (leftDown && !_leftWasDown)
-        {
-            _manualOffsetTick -= offsetStepTick;
-            Console.Title = $"Offset = {TicksToMs(_manualOffsetTick, Stopwatch.Frequency):F2} ms";
-        }
-
-        if (rightDown && !_rightWasDown)
-        {
-            _manualOffsetTick += offsetStepTick;
-            Console.Title = $"Offset = {TicksToMs(_manualOffsetTick, Stopwatch.Frequency):F2} ms";
-        }
-
-        _leftWasDown = leftDown;
-        _rightWasDown = rightDown;
+        long deltaTick = MsToTicks(deltaMs, Stopwatch.Frequency);
+        Interlocked.Add(ref _manualOffsetTick, deltaTick);
     }
-    
+
     private static long MsToTicks(double ms, long frequency)
     {
         return (long)Math.Round(ms * frequency / 1000.0);
     }
 
+    public double GetOffsetMs()
+    {
+        long ticks = Volatile.Read(ref _manualOffsetTick);
+        return TicksToMs(ticks, Stopwatch.Frequency);
+    }
     private static double TicksToMs(long ticks, long frequency)
     {
         return ticks * 1000.0 / frequency;
     }
 
-    private const int VK_LEFT = 0x25;
-    private const int VK_RIGHT = 0x27;
-
-    [DllImport("user32.dll")]
-    private static extern short GetAsyncKeyState(int vKey);
-
-    private static bool IsKeyDown(int vKey)
+    private static void PreparePlaybackThread()
     {
-        return (GetAsyncKeyState(vKey) & 0x8000) != 0;
+        try
+        {
+            Process.GetCurrentProcess().PriorityClass = ProcessPriorityClass.High;
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            Thread.CurrentThread.Priority = ThreadPriority.Highest;
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            IntPtr threadHandle = GetCurrentThread();
+            SetThreadAffinityMask(threadHandle, new UIntPtr(1));
+        }
+        catch
+        {
+        }
     }
+
+    private static IntPtr EnterMmcss()
+    {
+        uint taskIndex = 0;
+
+        // "Games" か "Pro Audio" を試す
+        IntPtr handle = AvSetMmThreadCharacteristics("Games", ref taskIndex);
+        if (handle != IntPtr.Zero)
+        {
+            AvSetMmThreadPriority(handle, AVRT_PRIORITY.AVRT_PRIORITY_HIGH);
+            return handle;
+        }
+
+        //handle = AvSetMmThreadCharacteristics("Pro Audio", ref taskIndex);
+        //if (handle != IntPtr.Zero)
+        //{
+        //    AvSetMmThreadPriority(handle, AVRT_PRIORITY.AVRT_PRIORITY_HIGH);
+        //    return handle;
+        //}
+
+        return IntPtr.Zero;
+    }
+
+    private enum AVRT_PRIORITY
+    {
+        AVRT_PRIORITY_LOW = -1,
+        AVRT_PRIORITY_NORMAL,
+        AVRT_PRIORITY_HIGH,
+        AVRT_PRIORITY_CRITICAL
+    }
+
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr GetCurrentThread();
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern UIntPtr SetThreadAffinityMask(IntPtr hThread, UIntPtr dwThreadAffinityMask);
+
+    [DllImport("avrt.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr AvSetMmThreadCharacteristics(string taskName, ref uint taskIndex);
+
+    [DllImport("avrt.dll", SetLastError = true)]
+    private static extern bool AvSetMmThreadPriority(IntPtr avrtHandle, AVRT_PRIORITY priority);
+
+    [DllImport("avrt.dll", SetLastError = true)]
+    private static extern bool AvRevertMmThreadCharacteristics(IntPtr avrtHandle);
 }

@@ -42,6 +42,11 @@ public sealed class ChartLoader
             .Select(ParsePauseEvent)
             .ToList();
 
+        List<HoldEvent> holdEvents = actions
+            .Where(x => x?["eventType"]?.GetValue<string>() == "Hold")
+            .Select(ParseHoldEvent)
+            .ToList();
+
         double initialBpm = obj["settings"]?["bpm"]?.GetValue<double>()
             ?? throw new InvalidOperationException("settings.bpm not found.");
 
@@ -50,7 +55,8 @@ public sealed class ChartLoader
             angleData,
             twirlFloors,
             speedEvents,
-            pauseEvents
+            pauseEvents,
+            holdEvents
         );
     }
 
@@ -92,6 +98,16 @@ public sealed class ChartLoader
         return new PauseEvent(floorIndex, duration);
     }
 
+    private static HoldEvent ParseHoldEvent(JsonNode? node)
+    {
+        if (node is null)
+            throw new InvalidOperationException("Hold node is null.");
+        int floorIndex = node["floor"]?.GetValue<int>()
+            ?? throw new InvalidOperationException("Hold floor missing.");
+        int duration = node["duration"]?.GetValue<int>()
+            ?? throw new InvalidOperationException("Hold duration missing.");
+        return new HoldEvent(floorIndex, duration);
+    }
     private static string SanitizeJson(string input)
     {
         StringBuilder sb = new(input.Length);

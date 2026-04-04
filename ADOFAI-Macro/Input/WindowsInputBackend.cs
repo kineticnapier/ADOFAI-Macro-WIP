@@ -8,10 +8,16 @@ namespace ADOFAI_Macro.Input;
 public sealed class WindowsInputBackend : IInputBackend
 {
     private const uint INPUT_KEYBOARD = 1;
+    private const uint KEYEVENTF_EXTENDEDKEY = 0x0001;
     private const uint KEYEVENTF_KEYUP = 0x0002;
+    private const uint KEYEVENTF_SCANCODE = 0x0008;
+    private const uint MAPVK_VK_TO_VSC = 0;
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern uint SendInput(uint cInputs, INPUT[] pInputs, int cbSize);
+
+    [DllImport("user32.dll")]
+    private static extern uint MapVirtualKey(uint uCode, uint uMapType);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct INPUT
@@ -48,7 +54,6 @@ public sealed class WindowsInputBackend : IInputBackend
         public uint time;
         public IntPtr dwExtraInfo;
     }
-
     [StructLayout(LayoutKind.Sequential)]
     private struct HARDWAREINPUT
     {
@@ -69,9 +74,25 @@ public sealed class WindowsInputBackend : IInputBackend
 
     private static void SendKey(ushort vk, bool keyUp)
     {
+        ushort scan = (ushort)MapVirtualKey(vk, MAPVK_VK_TO_VSC);
+
         INPUT[] inputs =
         [
-            CreateKeyInput(vk, keyUp)
+            new INPUT
+            {
+                type = INPUT_KEYBOARD,
+                U = new InputUnion
+                {
+                    ki = new KEYBDINPUT
+                    {
+                        wVk = 0,
+                        wScan = scan,
+                        dwFlags = KEYEVENTF_SCANCODE | (keyUp ? KEYEVENTF_KEYUP : 0),
+                        time = 0,
+                        dwExtraInfo = IntPtr.Zero
+                    }
+                }
+            }
         ];
 
         uint sent = SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
@@ -80,27 +101,8 @@ public sealed class WindowsInputBackend : IInputBackend
             int error = Marshal.GetLastWin32Error();
             throw new Win32Exception(
                 error,
-                $"SendInput failed. sent={sent}, err={error}, cbSize={Marshal.SizeOf<INPUT>()}, vk=0x{vk:X2}");
+                $"SendInput failed. sent={sent}, err={error}, vk=0x{vk:X2}, scan=0x{scan:X2}");
         }
-    }
-
-    private static INPUT CreateKeyInput(ushort vk, bool keyUp)
-    {
-        return new INPUT
-        {
-            type = INPUT_KEYBOARD,
-            U = new InputUnion
-            {
-                ki = new KEYBDINPUT
-                {
-                    wVk = vk,
-                    wScan = 0,
-                    dwFlags = keyUp ? KEYEVENTF_KEYUP : 0,
-                    time = 0,
-                    dwExtraInfo = IntPtr.Zero
-                }
-            }
-        };
     }
 
     private static ushort MapVk(FingerKey key)

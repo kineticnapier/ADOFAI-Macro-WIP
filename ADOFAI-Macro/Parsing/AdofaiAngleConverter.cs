@@ -9,13 +9,16 @@ public static class AdofaiAngleConverter
     public static List<double> ConvertToRelativeAngles(
         IList<double> absoluteAngles,
         IEnumerable<int> twirlIndices,
-        IReadOnlyList<PauseEvent> pauseEvents)
+        IReadOnlyList<PauseEvent> pauseEvents,
+        IReadOnlyList<HoldEvent> holdEvents)
     {
         HashSet<int> twirlSet = new(twirlIndices);
 
         Dictionary<int, double> pauseMap = pauseEvents
             .GroupBy(p => p.FloorIndex)
             .ToDictionary(g => g.Key, g => g.Sum(p => p.Duration));
+
+        Dictionary<int, int> holdMap = BuildHoldMap(holdEvents);
 
         List <double> result = new();
         double prev = 0;
@@ -47,6 +50,14 @@ public static class AdofaiAngleConverter
                 rel += 180.0 * duration;
             }
 
+            if (holdMap.TryGetValue(i, out int holdDuration))
+            {
+                if (holdDuration >= 1)
+                {
+                    rel += 360.0 * holdDuration;
+                }
+            }
+
             result.Add(rel);
             prev = cur;
         }
@@ -54,6 +65,23 @@ public static class AdofaiAngleConverter
         return result;
     }
 
+    private static Dictionary<int, int> BuildHoldMap(IEnumerable<HoldEvent> holdEvents)
+    {
+        Dictionary<int, int> map = new();
+        foreach (HoldEvent ev in holdEvents)
+        {
+            if (ev.Duration < 0)
+                throw new InvalidOperationException(
+                    $"Hold duration must be non-negative. floor={ev.FloorIndex}, duration={ev.Duration}");
+
+            if (map.ContainsKey(ev.FloorIndex))
+                throw new InvalidOperationException(
+                    $"Duplicate Hold event on the same floor is not supported. floor={ev.FloorIndex}");
+
+            map[ev.FloorIndex] = ev.Duration;
+        }
+        return map;
+    }
     private static double NormalizeAngle(double angle)
     {
         double a = angle % 360;

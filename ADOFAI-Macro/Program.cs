@@ -4,11 +4,43 @@ using ADOFAI_Macro.Models;
 using ADOFAI_Macro.Parsing;
 using ADOFAI_Macro.Scheduling;
 
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+
 namespace ADOFAI_Macro;
+
+internal static partial class NativeMethods
+{
+    [DllImport("winmm.dll", SetLastError = true)]
+    public static extern uint timeBeginPeriod(uint uPeriod);
+
+    [DllImport("winmm.dll", SetLastError = true)]
+    public static extern uint timeEndPeriod(uint uPeriod);
+}
 
 internal static class Program
 {
     static void Main(string[] args)
+    {
+        NativeMethods.timeBeginPeriod(1);
+
+        try
+        {
+            RunMain(args);
+
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("エラーが発生しました: " + ex.Message);
+            Console.WriteLine("スタックトレース: " + ex.StackTrace);
+        }
+        finally
+        {
+            NativeMethods.timeEndPeriod(1);
+        }
+    }
+
+    static void RunMain(string[] args)
     {
         string path = args.Length > 0
             ? args[0]
@@ -38,10 +70,19 @@ internal static class Program
         IFingeringStrategy fingeringStrategy =
             new SequentialFingeringStrategy(
             [
-                 FingerKey.Tab, FingerKey.D1, FingerKey.D2, FingerKey.E,
-                 FingerKey.RightControl,
-                 FingerKey.P, FingerKey.Caret, FingerKey.Backslash, FingerKey.Enter,
-                 FingerKey.C, FingerKey.RightShift, FingerKey.LeftControl
+                FingerKey.Tab,
+                FingerKey.D1,
+                FingerKey.D2,
+                FingerKey.E,
+                FingerKey.P,
+                FingerKey.Caret,
+                FingerKey.Backslash,
+                FingerKey.Enter,
+                FingerKey.LeftControl,
+                //FingerKey.LeftShift,
+                //FingerKey.C,
+                FingerKey.RightShift,
+                //FingerKey.RightControl
             ]);
 
         // IFingeringStrategy fingeringStrategy =
@@ -60,11 +101,34 @@ internal static class Program
                 settings.ReleaseLeadMs,
                 settings.StreamAngle);
 
-        Console.WriteLine("最初のタイルを手動で叩いて開始してください。(開始ははSpaceキー)");
+        Console.WriteLine("最初のタイルを手動で叩いて開始してください。(開始はSpaceキー)");
+        Console.WriteLine("再生中: ←で早める / →で遅らせる");
+
         long startTick = new StartTrigger().WaitForFirstPress(VirtualKeys.SPACE);
 
         IInputBackend backend = new WindowsInputBackend();
         InputScheduler scheduler = new(backend);
-        scheduler.PlayEventsFromBaseTick(inputEvents, startTick);
+
+        using CancellationTokenSource cts = new();
+
+        OffsetController offsetController = new(scheduler, 0.5);
+
+        Thread offsetThread = new(() => offsetController.Run(cts.Token))
+        {
+            IsBackground = true,
+            Priority = ThreadPriority.AboveNormal
+        };
+
+        offsetThread.Start();
+
+        try
+        {
+            scheduler.PlayEventsFromBaseTick(inputEvents, startTick, cts.Token);
+        }
+        finally
+        {
+            cts.Cancel();
+            offsetThread.Join(50);
+        }
     }
 }
