@@ -1,4 +1,6 @@
-﻿namespace ADOFAI_Macro.Parsing;
+﻿using ADOFAI_Macro.Models;
+
+namespace ADOFAI_Macro.Parsing;
 
 public static class AdofaiAngleConverter
 {
@@ -6,9 +8,14 @@ public static class AdofaiAngleConverter
 
     public static List<double> ConvertToRelativeAngles(
         IList<double> absoluteAngles,
-        IEnumerable<int> twirlIndices)
+        IEnumerable<int> twirlIndices,
+        IReadOnlyList<PauseEvent> pauseEvents)
     {
         HashSet<int> twirlSet = new(twirlIndices);
+
+        Dictionary<int, double> pauseMap = pauseEvents
+            .GroupBy(p => p.FloorIndex)
+            .ToDictionary(g => g.Key, g => g.Sum(p => p.Duration));
 
         List <double> result = new();
         double prev = 0;
@@ -34,6 +41,11 @@ public static class AdofaiAngleConverter
             double rel = !twirled
                 ? NormalizeRelative(prev - cur + 180)
                 : NormalizeRelative(cur - prev + 180);
+
+            if (pauseMap.TryGetValue(i, out double duration))
+            {
+                rel += 180.0 * duration;
+            }
 
             result.Add(rel);
             prev = cur;
