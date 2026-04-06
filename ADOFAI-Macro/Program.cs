@@ -115,9 +115,8 @@ internal static class Program
             InputEventBuilder.Build(
                 scheduledNotes,
                 settings.NormalHoldMs,
-                settings.StreamHoldMs,
-                settings.ReleaseLeadMs,
-                settings.StreamAngle);
+                settings.ReleaseLeadMs
+            );
 
         Console.WriteLine("最初のタイルを手動で叩いて開始してください。(開始はSpaceキー)");
         Console.WriteLine("再生中: ←で早める / →で遅らせる");

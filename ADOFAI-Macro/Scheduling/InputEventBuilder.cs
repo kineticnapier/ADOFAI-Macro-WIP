@@ -10,10 +10,8 @@ public sealed class InputEventBuilder
 
     public static IReadOnlyList<ScheduledInputEvent> Build(
         IReadOnlyList<ScheduledNote> notes,
-        double normalHoldMs,
-        double streamHoldMs,
-        double releaseLeadMs,
-        int streamAngle)
+        double holdMs,
+        double releaseLeadMs)
     {
         long releaseLeadTicks = MsToTicks(releaseLeadMs);
 
@@ -23,9 +21,6 @@ public sealed class InputEventBuilder
         foreach (ScheduledNote note in notes.OrderBy(n => n.TargetTick))
         {
             long downTick = note.TargetTick;
-            double holdMs = IsSameAngle(note.RelativeAngle, streamAngle)
-                ? streamHoldMs
-                : normalHoldMs;
             long upTick = downTick + MsToTicks(holdMs);
 
             if (pendingUps.TryGetValue(note.Key, out ScheduledInputEvent? previousUp))
