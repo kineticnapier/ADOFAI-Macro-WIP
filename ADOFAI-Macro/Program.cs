@@ -4,7 +4,6 @@ using ADOFAI_Macro.Models;
 using ADOFAI_Macro.Parsing;
 using ADOFAI_Macro.Scheduling;
 
-using System.Diagnostics;
 using System.Runtime.InteropServices;
 
 namespace ADOFAI_Macro;
@@ -42,9 +41,16 @@ internal static class Program
 
     static void RunMain(string[] args)
     {
-        string path = args.Length > 0
-            ? args[0]
-            : Console.ReadLine() ?? throw new InvalidOperationException("No path provided.");
+        string? path = null;
+        if (args.Length > 0)
+        {
+            path = args[0];
+        } else
+        {
+            Console.WriteLine("Input the path to the adofai map:");
+            path = Console.ReadLine();
+        }
+        if (path == string.Empty) throw new InvalidOperationException("No path provided.");
 
         MacroSettings settings = new();
 
