@@ -8,5 +8,5 @@ public sealed class MacroSettings
 
     public double NormalHoldMs { get; init; } = 120.0;
     public double StreamHoldMs { get; init; } = 3.0;
-    public double ReleaseLeadMs { get; init; } = 0.2;
+    public double ReleaseLeadMs { get; init; } = 40.0;
 }

@@ -6,6 +6,14 @@ public static class VirtualKeys
     public const ushort TAB = 0x09;
     public const ushort D1 = 0x31;
     public const ushort D2 = 0x32;
+    public const ushort D3 = 0x33;
+    public const ushort D4 = 0x34;
+    public const ushort D5 = 0x35;
+    public const ushort D6 = 0x36;
+    public const ushort D7 = 0x37;
+    public const ushort D8 = 0x38;
+    public const ushort D9 = 0x39;
+    public const ushort D0 = 0x30;
     public const ushort ENTER = 0x0D;
     public const ushort OEM_7 = 0xDE;   // ^ に使う
     public const ushort OEM_5 = 0xDC;   // \ に使う

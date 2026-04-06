@@ -101,6 +101,16 @@ internal static class Program
                 FingerKey.X,
                 FingerKey.Y,
                 FingerKey.Z,
+                FingerKey.D2,
+                FingerKey.D3,
+                FingerKey.D4,
+                FingerKey.D5,
+                FingerKey.D6,
+                FingerKey.D7,
+                FingerKey.D8,
+                FingerKey.D9,
+                FingerKey.D0,
+                FingerKey.Enter
             ]);
 
         // IFingeringStrategy fingeringStrategy =
