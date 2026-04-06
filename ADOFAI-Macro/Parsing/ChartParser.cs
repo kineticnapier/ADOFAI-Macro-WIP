@@ -13,21 +13,24 @@ public sealed class ChartParser
             raw.TwirlFloors,
             raw.PauseEvents,
             raw.HoldEvents,
-            raw.MultiPlanetEvents);
+            raw.MultiPlanetEvents,
+            raw.AutoPlayTilesEvents,
+            out List<bool> autoFlags);
 
         List<double> tileBpms = AdofaiBpmCalculator.BuildTileBpmList(
             angleData,
             raw.InitialBpm,
             raw.SpeedEvents);
 
-        List<ChartNote> notes = BuildNotes(relativeAngles, tileBpms);
+        List<ChartNote> notes = BuildNotes(relativeAngles, tileBpms, autoFlags);
 
         return new ParsedChart(relativeAngles, tileBpms, notes);
     }
 
     private static List<ChartNote> BuildNotes(
         IReadOnlyList<double> relativeAngles,
-        IReadOnlyList<double> tileBpms)
+        IReadOnlyList<double> tileBpms,
+        IReadOnlyList<bool> autoFlags)
     {
         if (relativeAngles.Count != tileBpms.Count)
             throw new InvalidOperationException("relativeAngles and tileBpms count mismatch.");
@@ -52,7 +55,8 @@ public sealed class ChartParser
             notes.Add(new ChartNote(
                 i,
                 currentTimeMs,
-                relativeAngles[i]
+                relativeAngles[i],
+                autoFlags[i]
             ));
 
 

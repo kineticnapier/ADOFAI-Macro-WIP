@@ -12,7 +12,9 @@ public static class AdofaiAngleConverter
         IEnumerable<int> twirlIndices,
         IReadOnlyList<PauseEvent> pauseEvents,
         IReadOnlyList<HoldEvent> holdEvents,
-        IReadOnlyList<MultiPlanetEvent> multiPlanetEvents)
+        IReadOnlyList<MultiPlanetEvent> multiPlanetEvents,
+        IReadOnlyList<AutoPlayTilesEvent> autoPlayTilesEvents,
+        out List<bool> autoFlags)
     {
         HashSet<int> twirlSet = [.. twirlIndices];
 
@@ -24,10 +26,17 @@ public static class AdofaiAngleConverter
 
         Dictionary<int, int> multiPlanetMap = BuildMultiPlanetMap(multiPlanetEvents);
 
-        List <double> result = [];
+        Dictionary<int, bool> autoPlayMap = autoPlayTilesEvents
+            .GroupBy(e => e.FloorIndex - 1)
+            .ToDictionary(g => g.Key, g => g.Last().Enabled);
+
+        List<double> result = [];
+        autoFlags = [];
+
         double prev = 0;
         bool twirled = false;
         int currentPlanetCount = 2;
+        bool autoPlayEnabled = false;
 
         for (int i = 0; i < absoluteAngles.Count; i++)
         {
@@ -36,9 +45,14 @@ public static class AdofaiAngleConverter
                 twirled = !twirled;
             }
 
-            if (multiPlanetMap.TryGetValue(i, out int newplanetCount))
+            if (multiPlanetMap.TryGetValue(i, out int newPlanetCount))
             {
-                currentPlanetCount = newplanetCount;
+                currentPlanetCount = newPlanetCount;
+            }
+
+            if (autoPlayMap.TryGetValue(i, out bool newAutoPlayState))
+            {
+                autoPlayEnabled = newAutoPlayState;
             }
 
             double raw = absoluteAngles[i];
@@ -74,6 +88,8 @@ public static class AdofaiAngleConverter
             }
 
             result.Add(rel);
+            autoFlags.Add(autoPlayEnabled);
+
             prev = cur;
         }
 

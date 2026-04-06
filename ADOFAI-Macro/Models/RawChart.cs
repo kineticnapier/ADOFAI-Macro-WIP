@@ -7,5 +7,6 @@ public sealed record RawChart(
     IReadOnlyList<SpeedEvent> SpeedEvents,
     IReadOnlyList<PauseEvent> PauseEvents,
     IReadOnlyList<HoldEvent> HoldEvents,
-    IReadOnlyList<MultiPlanetEvent> MultiPlanetEvents
+    IReadOnlyList<MultiPlanetEvent> MultiPlanetEvents,
+    IReadOnlyList<AutoPlayTilesEvent> AutoPlayTilesEvents
 );

@@ -21,9 +21,17 @@ public sealed class SequentialFingeringStrategy : IFingeringStrategy
     {
         FingerKey[] result = new FingerKey[notes.Count];
 
+        int pressIndex = 0;
+
         for (int i = 0; i < notes.Count; i++)
         {
-            result[i] = _keyOrder[i % _keyOrder.Count];
+            if (notes[i].IsAutoTile)
+            {
+                result[i] = default; // AutoTileはキーを押さない
+                continue;
+            }
+            result[i] = _keyOrder[pressIndex % _keyOrder.Count];
+            pressIndex++;
         }
 
         return result;

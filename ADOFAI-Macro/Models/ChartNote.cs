@@ -3,5 +3,6 @@
 public sealed record ChartNote(
     int Index,
     double TimeMs,
-    double RelativeAngle
+    double RelativeAngle,
+    bool IsAutoTile
 );

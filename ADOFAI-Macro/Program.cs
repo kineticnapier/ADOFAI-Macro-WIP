@@ -87,7 +87,7 @@ internal static class Program
                 FingerKey.J,
                 FingerKey.K,
                 FingerKey.L,
-                FingerKey.M,
+                FingerKey.D1,
                 FingerKey.N,
                 FingerKey.O,
                 FingerKey.P,

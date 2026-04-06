@@ -14,20 +14,25 @@ public sealed class ScheduleBuilder
         if (notes.Count != delayedMs.Count || notes.Count != fingering.Count)
             throw new ArgumentException("Input lists must have the same length.");
 
-        ScheduledNote[] result = new ScheduledNote[notes.Count];
+        List<ScheduledNote> result = new (notes.Count);
         long frequency = Stopwatch.Frequency;
 
         for (int i = 0; i < notes.Count; i++)
         {
+            if (notes[i].IsAutoTile)
+            {
+                continue;
+            }
+
             long targetTick = (long)Math.Round(delayedMs[i] * frequency / 1000.0);
 
-            result[i] = new ScheduledNote(
+            result.Add(new ScheduledNote(
                 notes[i].Index,
                 notes[i].TimeMs,
                 fingering[i],
                 targetTick,
                 notes[i].RelativeAngle
-            );
+            ));
         }
 
         return result;

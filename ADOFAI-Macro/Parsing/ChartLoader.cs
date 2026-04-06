@@ -12,7 +12,13 @@ public sealed class ChartLoader
         string rawText = File.ReadAllText(path);
         string text = SanitizeJson(rawText);
 
-        JsonNode root = JsonNode.Parse(text)
+        JsonNode root = JsonNode.Parse(text, 
+            documentOptions: new System.Text.Json.JsonDocumentOptions
+            {
+                AllowDuplicateProperties = true,
+                AllowTrailingCommas = true,
+                CommentHandling = System.Text.Json.JsonCommentHandling.Skip
+            })
             ?? throw new InvalidOperationException("Failed to parse JSON.");
 
         JsonObject obj = root.AsObject();
@@ -45,6 +51,10 @@ public sealed class ChartLoader
             .Where(x => x?["eventType"]?.GetValue<string>() == "MultiPlanet")
             .Select(ParseMultiPlanetEvent)];
 
+        List<AutoPlayTilesEvent> autoPlayTilesEvents = [.. actions
+            .Where(x => x?["eventType"]?.GetValue<string>() == "AutoPlayTiles")
+            .Select(ParseAutoPlayTilesEvent)];
+
         double initialBpm = obj["settings"]?["bpm"]?.GetValue<double>()
             ?? throw new InvalidOperationException("settings.bpm not found.");
 
@@ -55,7 +65,8 @@ public sealed class ChartLoader
             speedEvents,
             pauseEvents,
             holdEvents,
-            multiPlanetEvents
+            multiPlanetEvents,
+            autoPlayTilesEvents
         );
     }
 
@@ -123,6 +134,16 @@ public sealed class ChartLoader
         };
         
         return new MultiPlanetEvent(floorIndex, planetCount);
+    }
+    private static AutoPlayTilesEvent ParseAutoPlayTilesEvent(JsonNode? node)
+    {
+        if (node is null)
+            throw new InvalidOperationException("AutoPlayTiles node is null.");
+        int floorIndex = node["floor"]?.GetValue<int>()
+            ?? throw new InvalidOperationException("AutoPlayTiles floor missing.");
+        bool enabled = node["enabled"]?.GetValue<bool>()
+            ?? throw new InvalidOperationException("AutoPlayTiles enabled missing.");
+        return new AutoPlayTilesEvent(floorIndex, enabled);
     }
 
     private static string SanitizeJson(string input)
