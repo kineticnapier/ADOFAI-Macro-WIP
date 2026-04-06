@@ -84,10 +84,10 @@ internal static class Program
                 FingerKey.Backslash,
                 FingerKey.Enter,
                 FingerKey.LeftControl,
-                //FingerKey.LeftShift,
-                //FingerKey.C,
+                FingerKey.LeftShift,
+                FingerKey.C,
                 FingerKey.RightShift,
-                //FingerKey.RightControl
+                FingerKey.RightControl
             ]);
 
         // IFingeringStrategy fingeringStrategy =
