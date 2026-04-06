@@ -1,5 +1,5 @@
 <Solution>
   <Project Path="ADOFAI-Macro/ADOFAI-Macro.csproj" />
   <Project Path="JSONDuplicatorDelete/JSONDuplicateKeyCleaner.csproj" Id="0cc28faa-b48d-45a0-b81e-6a41ec63fefe" />
-  <Project Path="VKCodeViewer.cs/VKCodeViewer.cs.csproj" Id="fb209373-c2e8-42ca-9539-ea094f57e13d" />
+  <Project Path="VKCodeViewer.cs/VKCodeViewer.csproj" Id="fb209373-c2e8-42ca-9539-ea094f57e13d" />
 </Solution>
