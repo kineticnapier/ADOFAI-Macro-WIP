@@ -12,7 +12,8 @@ public sealed class ChartParser
             angleData,
             raw.TwirlFloors,
             raw.PauseEvents,
-            raw.HoldEvents);
+            raw.HoldEvents,
+            raw.MultiPlanetEvents);
 
         List<double> tileBpms = AdofaiBpmCalculator.BuildTileBpmList(
             angleData,

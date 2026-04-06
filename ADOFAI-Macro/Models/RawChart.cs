@@ -6,5 +6,6 @@ public sealed record RawChart(
     IReadOnlyList<int> TwirlFloors,
     IReadOnlyList<SpeedEvent> SpeedEvents,
     IReadOnlyList<PauseEvent> PauseEvents,
-    IReadOnlyList<HoldEvent> HoldEvents
+    IReadOnlyList<HoldEvent> HoldEvents,
+    IReadOnlyList<MultiPlanetEvent> MultiPlanetEvents
 );

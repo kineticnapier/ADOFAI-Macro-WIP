@@ -41,6 +41,10 @@ public sealed class ChartLoader
             .Where(x => x?["eventType"]?.GetValue<string>() == "Hold")
             .Select(ParseHoldEvent)];
 
+        List<MultiPlanetEvent> multiPlanetEvents = [.. actions
+            .Where(x => x?["eventType"]?.GetValue<string>() == "MultiPlanet")
+            .Select(ParseMultiPlanetEvent)];
+
         double initialBpm = obj["settings"]?["bpm"]?.GetValue<double>()
             ?? throw new InvalidOperationException("settings.bpm not found.");
 
@@ -50,7 +54,8 @@ public sealed class ChartLoader
             twirlFloors,
             speedEvents,
             pauseEvents,
-            holdEvents
+            holdEvents,
+            multiPlanetEvents
         );
     }
 
@@ -91,7 +96,6 @@ public sealed class ChartLoader
             ?? throw new InvalidOperationException("Pause duration missing.");
         return new PauseEvent(floorIndex, duration);
     }
-
     private static HoldEvent ParseHoldEvent(JsonNode? node)
     {
         if (node is null)
@@ -102,6 +106,25 @@ public sealed class ChartLoader
             ?? throw new InvalidOperationException("Hold duration missing.");
         return new HoldEvent(floorIndex, duration);
     }
+    private static MultiPlanetEvent ParseMultiPlanetEvent(JsonNode? node)
+    {
+        if (node is null)
+            throw new InvalidOperationException("MultiPlanet node is null.");
+        int floorIndex = node["floor"]?.GetValue<int>()
+            ?? throw new InvalidOperationException("MultiPlanet floor missing.");
+        string planetStr = node["planets"]?.GetValue<string>()
+            ?? throw new InvalidOperationException("MultiPlanet planetCount missing.");
+
+        int planetCount = planetStr switch
+        {
+            "ThreePlanets" => 3,
+            "TwoPlanets" => 2,
+            _ => 2
+        };
+        
+        return new MultiPlanetEvent(floorIndex, planetCount);
+    }
+
     private static string SanitizeJson(string input)
     {
         StringBuilder sb = new(input.Length);

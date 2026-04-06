@@ -6,11 +6,13 @@ public static class AdofaiAngleConverter
 {
     private const int Midspin = 999;
 
+    // 処理方法はadofaiの仕様に基づいています。
     public static List<double> ConvertToRelativeAngles(
         IList<double> absoluteAngles,
         IEnumerable<int> twirlIndices,
         IReadOnlyList<PauseEvent> pauseEvents,
-        IReadOnlyList<HoldEvent> holdEvents)
+        IReadOnlyList<HoldEvent> holdEvents,
+        IReadOnlyList<MultiPlanetEvent> multiPlanetEvents)
     {
         HashSet<int> twirlSet = [.. twirlIndices];
 
@@ -20,15 +22,23 @@ public static class AdofaiAngleConverter
 
         Dictionary<int, int> holdMap = BuildHoldMap(holdEvents);
 
+        Dictionary<int, int> multiPlanetMap = BuildMultiPlanetMap(multiPlanetEvents);
+
         List <double> result = [];
         double prev = 0;
         bool twirled = false;
+        int currentPlanetCount = 2;
 
         for (int i = 0; i < absoluteAngles.Count; i++)
         {
             if (twirlSet.Contains(i))
             {
                 twirled = !twirled;
+            }
+
+            if (multiPlanetMap.TryGetValue(i, out int newplanetCount))
+            {
+                currentPlanetCount = newplanetCount;
             }
 
             double raw = absoluteAngles[i];
@@ -58,6 +68,11 @@ public static class AdofaiAngleConverter
                 }
             }
 
+            if (currentPlanetCount == 3)
+            {
+                rel = NormalizeRelative(rel - 60.0);
+            }
+
             result.Add(rel);
             prev = cur;
         }
@@ -82,6 +97,26 @@ public static class AdofaiAngleConverter
         }
         return map;
     }
+    private static Dictionary<int, int> BuildMultiPlanetMap(IEnumerable<MultiPlanetEvent> multiPlanetEvents)
+    {
+        Dictionary<int, int> map = [];
+
+        foreach (MultiPlanetEvent ev in multiPlanetEvents)
+        {
+            if (ev.PlanetCount is not (2 or 3))
+                throw new InvalidOperationException(
+                    $"Planet count must be 2 or 3. floor={ev.FloorIndex}, planets={ev.PlanetCount}");
+
+            if (map.ContainsKey(ev.FloorIndex))
+                throw new InvalidOperationException(
+                    $"Duplicate MultiPlanet event on the same floor is not supported. floor={ev.FloorIndex}");
+
+            map[ev.FloorIndex] = ev.PlanetCount;
+        }
+
+        return map;
+    }
+
     private static double NormalizeAngle(double angle)
     {
         double a = angle % 360;
