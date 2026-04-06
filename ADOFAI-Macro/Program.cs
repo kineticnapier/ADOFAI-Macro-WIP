@@ -50,7 +50,7 @@ internal static class Program
             Console.WriteLine("Input the path to the adofai map:");
             path = Console.ReadLine();
         }
-        if (path == string.Empty) throw new InvalidOperationException("No path provided.");
+        if (path == string.Empty || path == null) throw new InvalidOperationException("No path provided.");
 
         MacroSettings settings = new();
 
