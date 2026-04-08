@@ -72,9 +72,7 @@ internal static class Program
         //        settings.PseudoChordThreshold,
         //        settings.StreamAngle);
 
-        IFingeringStrategy fingeringStrategy =
-            new SequentialFingeringStrategy(
-            [
+        List<FingerKey> usingKeys = [
                 FingerKey.A,
                 FingerKey.B,
                 FingerKey.C,
@@ -83,35 +81,61 @@ internal static class Program
                 FingerKey.F,
                 FingerKey.G,
                 FingerKey.H,
-                //FingerKey.I,
-                //FingerKey.J,
+                FingerKey.I,
+                FingerKey.J,
                 FingerKey.K,
                 FingerKey.L,
                 FingerKey.D1,
                 FingerKey.N,
-                //FingerKey.O,
-                //FingerKey.P,
-                //FingerKey.Q,
-                //FingerKey.R,
-                //FingerKey.S,
-                //FingerKey.T,
-                //FingerKey.U,
-                //FingerKey.V,
-                //FingerKey.W,
-                //FingerKey.X,
-                //FingerKey.Y,
-                //FingerKey.Z,
-                //FingerKey.D2,
-                //FingerKey.D3,
-                //FingerKey.D4,
-                //FingerKey.D5,
-                //FingerKey.D6,
-                //FingerKey.D7,
-                //FingerKey.D8,
-                //FingerKey.D9,
-                //FingerKey.D0,
+                FingerKey.O,
+                FingerKey.P,
+                FingerKey.Q,
+                FingerKey.R,
+                FingerKey.S,
+                FingerKey.T,
+                FingerKey.U,
+                FingerKey.V,
+                FingerKey.W,
+                FingerKey.X,
+                FingerKey.Y,
+                FingerKey.Z,
+                FingerKey.D2,
+                FingerKey.D3,
+                FingerKey.D4,
+                FingerKey.D5,
+                FingerKey.D6,
+                FingerKey.D7,
+                FingerKey.D8,
+                FingerKey.D9,
+                FingerKey.D0,
                 //FingerKey.Enter
-            ]);
+            ];
+
+        List<KeyCountRange> ranges = ReadKeyCountRangesFromConsole();
+
+        var keyCounts = KeyCountResolver.ResolvePerNoteKeyCounts(
+            parsedChart.Notes, 
+            ranges, 
+            defaultKeyCount: usingKeys.Count);
+
+
+
+        for (int i = 0; i < parsedChart.Notes.Count; i++)
+        {
+            int tileIndex = parsedChart.Notes[i].Index;
+
+            if (i < 5 || (tileIndex >= 6185 && tileIndex <= 6195))
+            {
+                Console.WriteLine(
+                    $"noteIndex={i}, tileIndex={tileIndex}, keyCount={keyCounts[i]}");
+            }
+        }
+
+        IFingeringStrategy fingeringStrategy =
+            new KeyLimitedSequentialFingeringStrategy(
+                usingKeys,
+                keyCounts
+            );
 
         // IFingeringStrategy fingeringStrategy =
         //     new PseudoChordFingeringStrategy(keyGroup, settings.PseudoChordThreshold);
@@ -157,5 +181,43 @@ internal static class Program
             cts.Cancel();
             offsetThread.Join(50);
         }
+    }
+
+
+    public static List<KeyCountRange> ReadKeyCountRangesFromConsole()
+    {
+        Console.Write("制限変更の数を入力してください: ");
+        int count = int.Parse(Console.ReadLine() ?? throw new InvalidOperationException());
+
+        List<KeyCountRange> result = new(count);
+
+        for (int i = 0; i < count; i++)
+        {
+            Console.Write($"制限{i + 1} (開始タイル番号(1始まり) キー数): ");
+            string line = Console.ReadLine() ?? throw new InvalidOperationException();
+
+            string[] parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+            if (parts.Length != 2)
+            {
+                throw new FormatException("入力形式は \"開始タイル番号 キー数\" です。");
+            }
+
+            int startTileNumber = int.Parse(parts[0]);
+            int keyCount = int.Parse(parts[1]);
+
+            if (startTileNumber <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(startTileNumber), "開始タイル番号は1以上で入力してください。");
+            }
+
+            result.Add(new KeyCountRange
+            {
+                StartTileIndex = startTileNumber - 1,
+                KeyCount = keyCount
+            });
+        }
+
+        return result;
     }
 }

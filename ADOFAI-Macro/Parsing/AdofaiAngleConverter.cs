@@ -14,7 +14,8 @@ public static class AdofaiAngleConverter
         IReadOnlyList<HoldEvent> holdEvents,
         IReadOnlyList<MultiPlanetEvent> multiPlanetEvents,
         IReadOnlyList<AutoPlayTilesEvent> autoPlayTilesEvents,
-        out List<bool> autoFlags)
+        out List<bool> autoFlags,
+        out List<int> sourceIndices)
     {
         HashSet<int> twirlSet = [.. twirlIndices];
 
@@ -32,6 +33,7 @@ public static class AdofaiAngleConverter
 
         List<double> result = [];
         autoFlags = [];
+        sourceIndices = [];
 
         double prev = 0;
         bool twirled = false;
@@ -89,6 +91,7 @@ public static class AdofaiAngleConverter
 
             result.Add(rel);
             autoFlags.Add(autoPlayEnabled);
+            sourceIndices.Add(i);
 
             prev = cur;
         }

@@ -15,20 +15,22 @@ public sealed class ChartParser
             raw.HoldEvents,
             raw.MultiPlanetEvents,
             raw.AutoPlayTilesEvents,
-            out List<bool> autoFlags);
+            out List<bool> autoFlags,
+            out List<int> sourceIndices);
 
         List<double> tileBpms = AdofaiBpmCalculator.BuildTileBpmList(
             angleData,
             raw.InitialBpm,
             raw.SpeedEvents);
 
-        List<ChartNote> notes = BuildNotes(relativeAngles, tileBpms, autoFlags);
+        List<ChartNote> notes = BuildNotes(relativeAngles, sourceIndices, tileBpms, autoFlags);
 
         return new ParsedChart(relativeAngles, tileBpms, notes);
     }
 
     private static List<ChartNote> BuildNotes(
         IReadOnlyList<double> relativeAngles,
+        IReadOnlyList<int> sourceIndices,
         IReadOnlyList<double> tileBpms,
         IReadOnlyList<bool> autoFlags)
     {
@@ -54,6 +56,7 @@ public sealed class ChartParser
 
             notes.Add(new ChartNote(
                 i,
+                sourceIndices[i],
                 currentTimeMs,
                 relativeAngles[i],
                 autoFlags[i]
