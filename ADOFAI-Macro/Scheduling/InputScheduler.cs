@@ -31,6 +31,8 @@ public sealed class InputScheduler(IInputBackend backend)
             long yieldThreshold = MsToTicks(0.5, frequency);
             long tightSpinThreshold = MsToTicks(0.10, frequency);
 
+            long absoluteTarget = 0;
+
             foreach (ScheduledInputEvent ev in events)
             {
                 while (true)
@@ -39,7 +41,7 @@ public sealed class InputScheduler(IInputBackend backend)
                         return;
 
                     long offsetTick = Volatile.Read(ref _manualOffsetTick);
-                    long absoluteTarget = baseTick + ev.TargetTick + offsetTick - dispatchAdvanceTick;
+                    absoluteTarget = baseTick + ev.TargetTick + offsetTick - dispatchAdvanceTick;
 
                     long now = Stopwatch.GetTimestamp();
                     long remain = absoluteTarget - now;
@@ -71,7 +73,9 @@ public sealed class InputScheduler(IInputBackend backend)
                 }
 
                 if (ev.Type == InputEventType.KeyDown)
+                {
                     _backend.KeyDown(ev.Key);
+                }
                 else
                     _backend.KeyUp(ev.Key);
             }
@@ -140,18 +144,18 @@ public sealed class InputScheduler(IInputBackend backend)
 
         // "Games" か "Pro Audio" を試す
         IntPtr handle = AvSetMmThreadCharacteristics("Games", ref taskIndex);
-        if (handle != IntPtr.Zero)
-        {
-            AvSetMmThreadPriority(handle, AVRT_PRIORITY.AVRT_PRIORITY_HIGH);
-            return handle;
-        }
-
-        //handle = AvSetMmThreadCharacteristics("Pro Audio", ref taskIndex);
         //if (handle != IntPtr.Zero)
         //{
         //    AvSetMmThreadPriority(handle, AVRT_PRIORITY.AVRT_PRIORITY_HIGH);
         //    return handle;
         //}
+
+        handle = AvSetMmThreadCharacteristics("Pro Audio", ref taskIndex);
+        if (handle != IntPtr.Zero)
+        {
+            AvSetMmThreadPriority(handle, AVRT_PRIORITY.AVRT_PRIORITY_HIGH);
+            return handle;
+        }
 
         return IntPtr.Zero;
     }
