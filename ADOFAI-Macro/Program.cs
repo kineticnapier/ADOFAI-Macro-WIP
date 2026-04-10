@@ -93,21 +93,21 @@ internal static class Program
                 FingerKey.R,
                 FingerKey.S,
                 FingerKey.T,
-                FingerKey.U,
-                FingerKey.V,
-                FingerKey.W,
-                FingerKey.X,
-                FingerKey.Y,
-                FingerKey.Z,
-                FingerKey.D2,
-                FingerKey.D3,
-                FingerKey.D4,
-                FingerKey.D5,
-                FingerKey.D6,
-                FingerKey.D7,
-                FingerKey.D8,
-                FingerKey.D9,
-                FingerKey.D0,
+                //FingerKey.U,
+                //FingerKey.V,
+                //FingerKey.W,
+                //FingerKey.X,
+                //FingerKey.Y,
+                //FingerKey.Z,
+                //FingerKey.D2,
+                //FingerKey.D3,
+                //FingerKey.D4,
+                //FingerKey.D5,
+                //FingerKey.D6,
+                //FingerKey.D7,
+                //FingerKey.D8,
+                //FingerKey.D9,
+                //FingerKey.D0,
                 //FingerKey.Enter
             ];
 
@@ -117,19 +117,6 @@ internal static class Program
             parsedChart.Notes, 
             ranges, 
             defaultKeyCount: usingKeys.Count);
-
-
-
-        for (int i = 0; i < parsedChart.Notes.Count; i++)
-        {
-            int tileIndex = parsedChart.Notes[i].Index;
-
-            if (i < 5 || (tileIndex >= 6185 && tileIndex <= 6195))
-            {
-                Console.WriteLine(
-                    $"noteIndex={i}, tileIndex={tileIndex}, keyCount={keyCounts[i]}");
-            }
-        }
 
         IFingeringStrategy fingeringStrategy =
             new KeyLimitedSequentialFingeringStrategy(
@@ -152,8 +139,15 @@ internal static class Program
                 settings.ReleaseLeadMs
             );
 
-        Console.WriteLine("最初のタイルを手動で叩いて開始してください。(開始はSpaceキー)");
-        Console.WriteLine("再生中: ←で早める / →で遅らせる");
+        Console.WriteLine("Please hit the first tile manually to start. (Default start key: Space)");
+        Console.WriteLine("During playback: Left arrow to speed up / Right arrow to slow down");
+
+        Console.WriteLine("------------");
+        Console.WriteLine("Tips for getting a Perfect Play (PP)");
+        Console.WriteLine("1. Keep the number of keys set to a minimum (using different input keys can cause slight processing lag).");
+        Console.WriteLine("2. Watch the judgment bar and adjust the offset with the arrow keys as needed.");
+        Console.WriteLine("3. For charts with strict judgment limits like HALL or long wait times at the beginning, leave it to luck.");
+        Console.WriteLine("------------");
 
         long startTick = StartTrigger.WaitForFirstPress(VirtualKeys.SPACE);
 
@@ -186,21 +180,21 @@ internal static class Program
 
     public static List<KeyCountRange> ReadKeyCountRangesFromConsole()
     {
-        Console.Write("制限変更の数を入力してください: ");
+        Console.Write("Please enter the number of key limit changes:");
         int count = int.Parse(Console.ReadLine() ?? throw new InvalidOperationException());
 
         List<KeyCountRange> result = new(count);
 
         for (int i = 0; i < count; i++)
         {
-            Console.Write($"制限{i + 1} (開始タイル番号(1始まり) キー数): ");
+            Console.Write($"Limit {i + 1} (Start tile number (1-indexed) Key count):");
             string line = Console.ReadLine() ?? throw new InvalidOperationException();
 
             string[] parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
 
             if (parts.Length != 2)
             {
-                throw new FormatException("入力形式は \"開始タイル番号 キー数\" です。");
+                throw new FormatException("The input format is \"(Start tile number) (Key count)\".");
             }
 
             int startTileNumber = int.Parse(parts[0]);
@@ -208,7 +202,7 @@ internal static class Program
 
             if (startTileNumber <= 0)
             {
-                throw new ArgumentOutOfRangeException(nameof(startTileNumber), "開始タイル番号は1以上で入力してください。");
+                throw new ArgumentOutOfRangeException(nameof(startTileNumber), "Please enter a start tile number of 1 or greater.");
             }
 
             result.Add(new KeyCountRange
