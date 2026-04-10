@@ -6,6 +6,8 @@ using ADOFAI_Macro.Scheduling;
 
 using System.Runtime.InteropServices;
 
+using static System.Runtime.InteropServices.JavaScript.JSType;
+
 namespace ADOFAI_Macro;
 
 internal static partial class NativeMethods
@@ -142,12 +144,16 @@ internal static class Program
         Console.WriteLine("Please hit the first tile manually to start. (Default start key: Space)");
         Console.WriteLine("During playback: Left arrow to speed up / Right arrow to slow down");
 
+        Console.WriteLine("");
         Console.WriteLine("------------");
         Console.WriteLine("Tips for getting a Perfect Play (PP)");
         Console.WriteLine("1. Keep the number of keys set to a minimum (using different input keys can cause slight processing lag).");
         Console.WriteLine("2. Watch the judgment bar and adjust the offset with the arrow keys as needed.");
         Console.WriteLine("3. For charts with strict judgment limits like HALL or long wait times at the beginning, leave it to luck.");
         Console.WriteLine("------------");
+
+        Console.WriteLine("");
+        Console.WriteLine("Note: 4 - digit KPS will always fail because the input lag is too severe. (In the developer's environment, 500 KPS was the limit.)");
 
         long startTick = StartTrigger.WaitForFirstPress(VirtualKeys.SPACE);
 
