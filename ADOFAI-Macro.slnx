@@ -1,7 +1,6 @@
 <Solution>
   <Project Path="ADOFAI-Macro/ADOFAI-Macro.csproj" />
   <Project Path="AdofaiPauseConverter/AdofaiPauseConverter.csproj" Id="12b26b15-6a7f-4e1e-9e91-b6def2c2bfe0" />
-  <Project Path="InputDevice/InputDevice.csproj" Id="3bfc3a81-32c7-46aa-922d-eca3135816d6" />
   <Project Path="JSONDuplicatorDelete/JSONDuplicateKeyCleaner.csproj" Id="0cc28faa-b48d-45a0-b81e-6a41ec63fefe" />
   <Project Path="VKCodeViewer.cs/VKCodeViewer.csproj" Id="fb209373-c2e8-42ca-9539-ea094f57e13d" />
 </Solution>
