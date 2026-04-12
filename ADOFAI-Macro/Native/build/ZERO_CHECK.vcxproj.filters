@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="18.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="E:\dev\ADOFAI-Macro\ADOFAI-Macro\Native\build\CMakeFiles\982b2c708afbbbe6a1804e58ec9ae8b6\generate.stamp.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{DBBDD342-25F2-3C73-B47F-64C3706B7583}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>
