@@ -95,22 +95,37 @@ internal static class Program
                 FingerKey.R,
                 FingerKey.S,
                 FingerKey.T,
-                //FingerKey.U,
-                //FingerKey.V,
-                //FingerKey.W,
-                //FingerKey.X,
-                //FingerKey.Y,
-                //FingerKey.Z,
-                //FingerKey.D2,
-                //FingerKey.D3,
-                //FingerKey.D4,
-                //FingerKey.D5,
-                //FingerKey.D6,
-                //FingerKey.D7,
-                //FingerKey.D8,
-                //FingerKey.D9,
-                //FingerKey.D0,
-                //FingerKey.Enter
+                FingerKey.U,
+                FingerKey.V,
+                FingerKey.W,
+                FingerKey.X,
+                FingerKey.Y,
+                FingerKey.Z,
+                FingerKey.D2,
+                FingerKey.D3,
+                FingerKey.D4,
+                FingerKey.D5,
+                FingerKey.D6,
+                FingerKey.D7,
+                FingerKey.D8,
+                FingerKey.D9,
+                FingerKey.D0,
+                FingerKey.Enter,
+                FingerKey.LeftShift,
+                FingerKey.LeftControl,
+                FingerKey.RightShift,
+                FingerKey.RightControl,
+                FingerKey.F1,
+                FingerKey.F2,
+                FingerKey.F3,
+                FingerKey.F4,
+                FingerKey.F5,
+                FingerKey.F6,
+                FingerKey.F7,
+                FingerKey.F8,
+                FingerKey.F9,
+                FingerKey.F10,
+                FingerKey.F11,
             ];
 
         List<KeyCountRange> ranges = ReadKeyCountRangesFromConsole();
@@ -153,7 +168,7 @@ internal static class Program
         Console.WriteLine("------------");
 
         Console.WriteLine("");
-        Console.WriteLine("Note: 4 - digit KPS will always fail because the input lag is too severe. (In the developer's environment, 500 KPS was the limit.)");
+        Console.WriteLine("Note: 4 - digit KPS will always fail because the input lag is too severe. (In the developer's environment, 640 KPS was the limit.)");
 
         long startTick = StartTrigger.WaitForFirstPress(VirtualKeys.SPACE);
 

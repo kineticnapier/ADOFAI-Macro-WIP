@@ -48,4 +48,16 @@ public static class VirtualKeys
     public const ushort X = 0x58;
     public const ushort Y = 0x59;
     public const ushort Z = 0x5A;
+    public const ushort F1 = 0x70;
+    public const ushort F2 = 0x71;
+    public const ushort F3 = 0x72;
+    public const ushort F4 = 0x73;
+    public const ushort F5 = 0x74;
+    public const ushort F6 = 0x75;
+    public const ushort F7 = 0x76;
+    public const ushort F8 = 0x77;
+    public const ushort F9 = 0x78;
+    public const ushort F10 = 0x79;
+    public const ushort F11 = 0x7A;
+    public const ushort F12 = 0x7B;
 }

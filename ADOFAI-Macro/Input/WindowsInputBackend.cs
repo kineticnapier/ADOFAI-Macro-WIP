@@ -179,6 +179,18 @@ public sealed class WindowsInputBackend : IInputBackend
             FingerKey.X => VirtualKeys.X,
             FingerKey.Y => VirtualKeys.Y,
             FingerKey.Z => VirtualKeys.Z,
+            FingerKey.F1 => VirtualKeys.F1,
+            FingerKey.F2 => VirtualKeys.F2,
+            FingerKey.F3 => VirtualKeys.F3,
+            FingerKey.F4 => VirtualKeys.F4,
+            FingerKey.F5 => VirtualKeys.F5,
+            FingerKey.F6 => VirtualKeys.F6,
+            FingerKey.F7 => VirtualKeys.F7,
+            FingerKey.F8 => VirtualKeys.F8,
+            FingerKey.F9 => VirtualKeys.F9,
+            FingerKey.F10 => VirtualKeys.F10,
+            FingerKey.F11 => VirtualKeys.F11,
+            FingerKey.F12 => VirtualKeys.F12,
             _ => throw new ArgumentOutOfRangeException(nameof(key))
         };
     }

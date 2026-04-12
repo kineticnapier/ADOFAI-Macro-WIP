@@ -2,6 +2,7 @@
 
 public sealed record RawChart(
     double InitialBpm,
+    int Pitch,
     IReadOnlyList<double> AngleData,
     IReadOnlyList<int> TwirlFloors,
     IReadOnlyList<SpeedEvent> SpeedEvents,

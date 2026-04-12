@@ -6,7 +6,7 @@ public sealed class MacroSettings
     public int PseudoChordThreshold { get; init; } = 30;
     public int StreamAngle { get; init; } = 45;
 
-    public double NormalHoldMs { get; init; } = 120.0;
+    public double NormalHoldMs { get; init; } = 40.0;
     public double StreamHoldMs { get; init; } = 3.0;
-    public double ReleaseLeadMs { get; init; } = 40.0;
+    public double ReleaseLeadMs { get; init; } = 10.0;
 }

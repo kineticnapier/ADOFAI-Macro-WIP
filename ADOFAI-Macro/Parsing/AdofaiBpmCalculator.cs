@@ -8,11 +8,12 @@ public static class AdofaiBpmCalculator
 
     public static List<double> BuildTileBpmList(
         IList<double> angleData,
+        int pitch,
         double initialBpm,
         IEnumerable<SpeedEvent> speedEvents)
     {
         List<double> result = [];
-        double currentBpm = initialBpm;
+        double currentBpm = initialBpm * pitch / 100.0;
 
         Dictionary<int, List<SpeedEvent>> eventsByFloor = speedEvents
             .GroupBy(e => e.FloorIndex)
@@ -26,7 +27,7 @@ public static class AdofaiBpmCalculator
                 {
                     currentBpm = ev.Type switch
                     {
-                        SpeedEventType.SetBpm => ev.Value,
+                        SpeedEventType.SetBpm => ev.Value * pitch / 100.0,
                         SpeedEventType.Multiply => currentBpm * ev.Value,
                         _ => throw new InvalidOperationException($"Unknown event type: {ev.Type}")
                     };

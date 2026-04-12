@@ -20,6 +20,7 @@ public sealed class ChartParser
 
         List<double> tileBpms = AdofaiBpmCalculator.BuildTileBpmList(
             angleData,
+            raw.Pitch,
             raw.InitialBpm,
             raw.SpeedEvents);
 

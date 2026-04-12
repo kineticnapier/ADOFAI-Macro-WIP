@@ -31,6 +31,8 @@ public sealed class ChartLoader
         JsonArray actions = obj["actions"]?.AsArray()
             ?? throw new InvalidOperationException("actions not found.");
 
+        int pitch = obj["settings"]?["pitch"]?.GetValue<int>() ?? 100;
+
         List<int> twirlFloors = [.. actions
             .Where(x => x?["eventType"]?.GetValue<string>() == "Twirl")
             .Select(x => x?["floor"]?.GetValue<int>() ?? throw new InvalidOperationException("Twirl floor missing."))];
@@ -60,6 +62,7 @@ public sealed class ChartLoader
 
         return new RawChart(
             initialBpm,
+            pitch,
             angleData,
             twirlFloors,
             speedEvents,
