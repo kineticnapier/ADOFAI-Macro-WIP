@@ -74,6 +74,59 @@ internal static class Program
         //        settings.PseudoChordThreshold,
         //        settings.StreamAngle);
 
+        //List<FingerKey> usingKeys = [
+        //        FingerKey.A,
+        //        FingerKey.B,
+        //        FingerKey.C,
+        //        FingerKey.D,
+        //        FingerKey.E,
+        //        FingerKey.F,
+        //        FingerKey.G,
+        //        FingerKey.H,
+        //        FingerKey.I,
+        //        FingerKey.J,
+        //        FingerKey.K,
+        //        FingerKey.L,
+        //        FingerKey.D1,
+        //        FingerKey.N,
+        //        FingerKey.O,
+        //        FingerKey.P,
+        //        FingerKey.Q,
+        //        FingerKey.R,
+        //        FingerKey.S,
+        //        FingerKey.T,
+        //        FingerKey.U,
+        //        FingerKey.V,
+        //        FingerKey.W,
+        //        FingerKey.X,
+        //        FingerKey.Y,
+        //        FingerKey.Z,
+        //        FingerKey.D2,
+        //        FingerKey.D3,
+        //        FingerKey.D4,
+        //        FingerKey.D5,
+        //        FingerKey.D6,
+        //        FingerKey.D7,
+        //        FingerKey.D8,
+        //        FingerKey.D9,
+        //        FingerKey.D0,
+        //        FingerKey.Enter,
+        //        FingerKey.LeftShift,
+        //        FingerKey.LeftControl,
+        //        FingerKey.RightShift,
+        //        FingerKey.RightControl,
+        //        FingerKey.F1,
+        //        FingerKey.F2,
+        //        FingerKey.F3,
+        //        FingerKey.F4,
+        //        FingerKey.F5,
+        //        FingerKey.F6,
+        //        FingerKey.F7,
+        //        FingerKey.F8,
+        //        FingerKey.F9,
+        //        FingerKey.F10,
+        //        FingerKey.F11,
+        //    ];
         List<FingerKey> usingKeys = [
                 FingerKey.A,
                 FingerKey.B,
@@ -83,49 +136,6 @@ internal static class Program
                 FingerKey.F,
                 FingerKey.G,
                 FingerKey.H,
-                FingerKey.I,
-                FingerKey.J,
-                FingerKey.K,
-                FingerKey.L,
-                FingerKey.D1,
-                FingerKey.N,
-                FingerKey.O,
-                FingerKey.P,
-                FingerKey.Q,
-                FingerKey.R,
-                FingerKey.S,
-                FingerKey.T,
-                FingerKey.U,
-                FingerKey.V,
-                FingerKey.W,
-                FingerKey.X,
-                FingerKey.Y,
-                FingerKey.Z,
-                FingerKey.D2,
-                FingerKey.D3,
-                FingerKey.D4,
-                FingerKey.D5,
-                FingerKey.D6,
-                FingerKey.D7,
-                FingerKey.D8,
-                FingerKey.D9,
-                FingerKey.D0,
-                FingerKey.Enter,
-                FingerKey.LeftShift,
-                FingerKey.LeftControl,
-                FingerKey.RightShift,
-                FingerKey.RightControl,
-                FingerKey.F1,
-                FingerKey.F2,
-                FingerKey.F3,
-                FingerKey.F4,
-                FingerKey.F5,
-                FingerKey.F6,
-                FingerKey.F7,
-                FingerKey.F8,
-                FingerKey.F9,
-                FingerKey.F10,
-                FingerKey.F11,
             ];
 
         List<KeyCountRange> ranges = ReadKeyCountRangesFromConsole();
@@ -135,16 +145,27 @@ internal static class Program
             ranges, 
             defaultKeyCount: usingKeys.Count);
 
+        FingeringProfile profile = new()
+        {
+            UsableKeys = usingKeys,
+            DensityProfile = new FingeringDensityProfile()
+        };
+
         IFingeringStrategy fingeringStrategy =
-            new KeyLimitedSequentialFingeringStrategy(
-                usingKeys,
-                keyCounts
+            new RuleBasedFingeringStrategy(
+                profile
             );
+
+        //IFingeringStrategy fingeringStrategy =
+        //    new KeyLimitedSequentialFingeringStrategy(
+        //        usingKeys,
+        //        keyCounts
+        //    );
 
         // IFingeringStrategy fingeringStrategy =
         //     new PseudoChordFingeringStrategy(keyGroup, settings.PseudoChordThreshold);
 
-        IReadOnlyList<FingerKey> fingering = fingeringStrategy.Generate(parsedChart.Notes);
+        IReadOnlyList <FingerKey> fingering = fingeringStrategy.Generate(parsedChart.Notes);
 
         IReadOnlyList<ScheduledNote> scheduledNotes =
             ScheduleBuilder.Build(parsedChart.Notes, delayTable, fingering);

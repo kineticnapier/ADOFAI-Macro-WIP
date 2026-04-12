@@ -1,4 +1,5 @@
-﻿namespace ADOFAI_Macro.Models;
+﻿
+namespace ADOFAI_Macro.Models;
 
 public sealed record ChartNote(
     int Index,
