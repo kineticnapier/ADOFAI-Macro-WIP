@@ -1,4 +1,5 @@
-﻿using ADOFAI_Macro.Models;
+﻿using ADOFAI_Macro.Interop;
+using ADOFAI_Macro.Models;
 
 namespace ADOFAI_Macro.Fingering;
 
@@ -14,6 +15,30 @@ public static class KeyCountResolver
         List<KeyCountRange> ordered = ranges
             .OrderBy(x => x.StartTileIndex)
             .ToList();
+
+        int[] tileIndices = new int[notes.Count];
+        for (int i = 0; i < notes.Count; i++)
+        {
+            tileIndices[i] = notes[i].TileIndex;
+        }
+
+        int[] rangeStarts = new int[ordered.Count];
+        int[] rangeKeyCounts = new int[ordered.Count];
+        for (int i = 0; i < ordered.Count; i++)
+        {
+            rangeStarts[i] = ordered[i].StartTileIndex;
+            rangeKeyCounts[i] = ordered[i].KeyCount;
+        }
+
+        if (NativeAcceleration.TryResolveKeyCounts(
+                tileIndices,
+                rangeStarts,
+                rangeKeyCounts,
+                defaultKeyCount,
+                result))
+        {
+            return result;
+        }
 
         int rangeIndex = 0;
         int currentKeyCount = defaultKeyCount;
