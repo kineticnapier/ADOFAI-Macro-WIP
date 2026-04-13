@@ -6,6 +6,17 @@
     <RootNamespace>ADOFAI_Macro</RootNamespace>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <Platforms>AnyCPU;x64</Platforms>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Folder Include="Native\build\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="Native\build\Release\adofai_native.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
 
 </Project>

@@ -23,6 +23,25 @@ A Dance of Fire and Ice（ADOFAI）向けのマクロ実験用リポジトリで
 - Windows（`user32.dll`, `winmm.dll` を使用）
 - .NET SDK 10.0（`net10.0` ターゲット）
 
+
+## C++ ネイティブ高速化（新規）
+
+計算量の大きい一部処理を C++ ネイティブライブラリ (`native/`) に移し、`P/Invoke` で呼び出せるようにしました。
+現在ネイティブ化済みの処理:
+
+- ノーツ時間テーブル生成（`generate_delay_table`）
+- 譜面進行に応じたキー数解決（`resolve_key_counts`）
+
+### ネイティブライブラリのビルド
+
+```bash
+cmake -S native -B native/build
+cmake --build native/build --config Release
+```
+
+出力された `adofai_native` (`.dll` / `.so`) を `ADOFAI-Macro` 実行ファイルと同じ場所へ配置すると、
+自動的に C++ 実装を利用します（見つからない場合は C# 実装にフォールバック）。
+
 ## ビルド
 
 ```bash
