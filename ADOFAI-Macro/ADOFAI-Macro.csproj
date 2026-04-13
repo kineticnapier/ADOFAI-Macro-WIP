@@ -13,4 +13,10 @@
     <Folder Include="Native\build\" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Update="Native\build\Release\adofai_native.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>

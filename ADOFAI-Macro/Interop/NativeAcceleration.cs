@@ -4,7 +4,7 @@ namespace ADOFAI_Macro.Interop;
 
 internal static class NativeAcceleration
 {
-    private const string NativeLibraryName = "adofai_native";
+    private const string NativeLibraryName = "adofai_native.dll";
 
     [DllImport(NativeLibraryName, EntryPoint = "generate_delay_table")]
     private static extern int GenerateDelayTableNative(
