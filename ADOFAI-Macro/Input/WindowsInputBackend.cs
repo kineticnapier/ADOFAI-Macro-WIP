@@ -124,6 +124,9 @@ public sealed class WindowsInputBackend : IInputBackend
         return key switch
         {
             FingerKey.RightControl => true,
+            FingerKey.RightAlt => true,
+            FingerKey.Up => true,
+            FingerKey.Down => true,
             // 必要なら他にも追加
             // FingerKey.Enter => true,  // テンキーEnterなら true だが通常Enterとは別扱い注意
             _ => false
@@ -153,6 +156,11 @@ public sealed class WindowsInputBackend : IInputBackend
             FingerKey.RightShift => VirtualKeys.RIGHT_SHIFT,
             FingerKey.LeftControl => VirtualKeys.LEFT_CONTROL,
             FingerKey.RightControl => VirtualKeys.RIGHT_CONTROL,
+            FingerKey.LeftAlt => VirtualKeys.LEFT_ALT,
+            FingerKey.RightAlt => VirtualKeys.RIGHT_ALT,
+            FingerKey.Plus => VirtualKeys.PLUS,
+            FingerKey.Minus => VirtualKeys.MINUS,
+            FingerKey.Comma => VirtualKeys.COMMA,
             FingerKey.A => VirtualKeys.A, //脳筋
             FingerKey.B => VirtualKeys.B,
             FingerKey.C => VirtualKeys.C,
@@ -191,6 +199,8 @@ public sealed class WindowsInputBackend : IInputBackend
             FingerKey.F10 => VirtualKeys.F10,
             FingerKey.F11 => VirtualKeys.F11,
             FingerKey.F12 => VirtualKeys.F12,
+            FingerKey.Up => VirtualKeys.UP,
+            FingerKey.Down => VirtualKeys.DOWN,
             _ => throw new ArgumentOutOfRangeException(nameof(key))
         };
     }

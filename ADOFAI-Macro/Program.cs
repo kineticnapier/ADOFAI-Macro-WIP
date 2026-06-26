@@ -126,6 +126,16 @@ internal static class Program
                 FingerKey.F9,
                 FingerKey.F10,
                 FingerKey.F11,
+                FingerKey.Up,
+                FingerKey.Down
+                //FingerKey.Caret,
+                //FingerKey.Tab
+                //FingerKey.LeftAlt,
+                //FingerKey.RightAlt,
+                //FingerKey.Plus,
+                //FingerKey.Comma,
+                //FingerKey.Minus,
+                //FingerKey.Period
             ];
         //List<FingerKey> usingKeys = [
         //        FingerKey.A,

@@ -1,0 +1,9 @@
+{
+  "Id": "MacroInserter",
+  "DisplayName": "Macro Inserter",
+  "Author": "ADOFAI-Macro",
+  "Version": "0.1.0",
+  "ManagerVersion": "0.27.3",
+  "AssemblyName": "Macro-Inserter.dll",
+  "EntryMethod": "Macro_Inserter.Main.Load"
+}

@@ -7,7 +7,7 @@ A Dance of Fire and Ice（ADOFAI）向けのマクロ実験用リポジトリで
 
 ## 構成
 
-このソリューションには以下の 4 プロジェクトがあります。
+このソリューションには以下の 5 プロジェクトがあります。
 
 - `ADOFAI-Macro`  
   ADOFAI 譜面（`.adofai`）を解析し、入力イベントをスケジューリングしてキーボード入力を送出するメインツール。
@@ -17,6 +17,8 @@ A Dance of Fire and Ice（ADOFAI）向けのマクロ実験用リポジトリで
   JSON 内の重複キーを検出・整形し、バックアップ付きで保存するクリーナー。
 - `VKCodeViewer.cs`  
   押したキーの Windows Virtual-Key コードを表示する簡易ツール。
+- `Macro-Inserter`  
+  UMM向けのmod用プロジェクト。ADOFAI内部で仮想入力を発生させる譜面検証用の実験機能です。競技、提出、ランキング用途では使用しないでください。
 
 ## 前提環境
 
@@ -27,6 +29,12 @@ A Dance of Fire and Ice（ADOFAI）向けのマクロ実験用リポジトリで
 
 ```bash
 dotnet build ADOFAI-Macro.slnx
+```
+
+`Macro-Inserter` はADOFAI本体のManaged DLLを参照します。既定ではSteam版の標準インストール先を見ます。別の場所にある場合は `ADOFAIManagedDir` を指定してください。
+
+```bash
+dotnet build Macro-Inserter/Macro-Inserter.csproj -p:ADOFAIManagedDir="C:\path\to\A Dance of Fire and Ice_Data\Managed"
 ```
 
 ## 使い方
@@ -71,8 +79,24 @@ dotnet run --project JSONDuplicatorDelete -- "chart.adofai"
 dotnet run --project VKCodeViewer.cs
 ```
 
+### 5) Macro-Inserter
+
+Unity Mod Managerで読み込むADOFAI内部マクロです。外部SendInput/Pico入力ではなく、`scrController` の内部入力候補に対してReflection/Harmonyで入力を差し込みます。
+
+UMM設定:
+
+- `EnableInternalMacro`: 内部マクロを有効化します。デフォルトはOFFです。
+- `DryRun`: 実入力せず、`targetTime`, `audioTime`, `diffMs`, `seqID` をログ出力します。
+- `MacroOffsetMs`: 予定入力時刻に加えるオフセットです。
+- `StartFromCurrentFloor`: 現在フロア以降から開始します。
+- `UseAudioTime`: `AudioSource.timeSamples / clip.frequency` を基準にします。OFFの場合は現在の音声時刻に固定したUnity unscaled timeを使います。
+- `FireMode`: `DirectHit` は `scrController.instance.Hit(false)` を呼び、`InputPatch` は `ValidInputWasTriggered` と `CountValidKeysPressed` を予定フレームだけ差し替えます。
+
+安全条件として、エディタ再生中またはPlayerControl中のみ動作し、pause中は進行しません。UMM画面や入力欄の操作中はスケジューラを開始しません。
+
 ## 注意事項
 
 - 高密度譜面では入力遅延の影響で理論上再現が困難になる場合があります。
 - 利用キー数を増やしすぎると処理負荷が増えるため、必要最小限のキー構成を推奨します。
 - 事前にコピー譜面で動作確認し、原本データはバックアップを取ってください。
+- `Macro-Inserter` は譜面検証用です。競技、提出、ランキング用途では使用しないでください。

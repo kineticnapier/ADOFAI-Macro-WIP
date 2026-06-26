@@ -17,11 +17,14 @@ public static class VirtualKeys
     public const ushort ENTER = 0x0D;
     public const ushort OEM_7 = 0xDE;   // ^ に使う
     public const ushort OEM_5 = 0xDC;   // \ に使う
-    public const ushort PERIOD = 0x40;
     public const ushort LEFT_SHIFT = 0xA0;
     public const ushort RIGHT_SHIFT = 0xA1;
     public const ushort LEFT_CONTROL = 0xA2;
     public const ushort RIGHT_CONTROL = 0xA3;
+    public const ushort COMMA = 0xBC;
+    public const ushort MINUS = 0xBD;
+    public const ushort PERIOD = 0xBE;
+    public const ushort PLUS = 0xBB;
     public const ushort A = 0x41;
     public const ushort B = 0x42;
     public const ushort C = 0x43;
@@ -60,4 +63,8 @@ public static class VirtualKeys
     public const ushort F10 = 0x79;
     public const ushort F11 = 0x7A;
     public const ushort F12 = 0x7B;
+    public const ushort LEFT_ALT = 0xA4;
+    public const ushort RIGHT_ALT = 0xA5;
+    public const ushort UP = 0x26;
+    public const ushort DOWN = 0x28;
 }
