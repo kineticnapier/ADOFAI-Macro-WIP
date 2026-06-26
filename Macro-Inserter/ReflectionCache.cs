@@ -62,6 +62,16 @@ internal static class ReflectionCache
         return FindType(typeName)?.GetMethod(methodName, InstanceFlags | StaticFlags);
     }
 
+    public static MethodInfo? FindMethod(string typeName, string methodName, params Type[] parameterTypes)
+    {
+        return FindType(typeName)?.GetMethod(
+            methodName,
+            InstanceFlags | StaticFlags,
+            binder: null,
+            types: parameterTypes,
+            modifiers: null);
+    }
+
     public static object? ReadMember(object instance, params string[] names)
     {
         return ReadMember(instance.GetType(), instance, names);

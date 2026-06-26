@@ -23,7 +23,7 @@ internal sealed class InternalMacroService
         this.log = log;
         planBuilder = new MacroPlanBuilder(log);
         audioClock = new AudioClock(log);
-        directHitInvoker = new DirectHitInvoker(log);
+        directHitInvoker = new DirectHitInvoker(settings, log);
     }
 
     public void Tick()
@@ -124,9 +124,16 @@ internal sealed class InternalMacroService
         }
 
         nextIndex = ResolveStartIndex(audioSeconds);
+        if (nextIndex >= plan.Count)
+        {
+            log($"Internal macro plan has no remaining entries. entries={plan.Count}, audioTime={audioSeconds:F6}s");
+            return false;
+        }
+
         running = true;
         runningFireMode = settings.FireMode;
-        log($"Internal macro scheduler started. entries={plan.Count}, startIndex={nextIndex}, audioTime={audioSeconds:F6}s, fireMode={settings.FireMode}, dryRun={settings.DryRun}");
+        MacroPlanEntry firstEntry = plan[nextIndex];
+        log($"Internal macro scheduler started. entries={plan.Count}, startIndex={nextIndex}, firstSeqID={firstEntry.SeqId}, firstTargetTime={firstEntry.TargetTimeSeconds:F6}s, audioTime={audioSeconds:F6}s, fireMode={settings.FireMode}, dryRun={settings.DryRun}");
         return true;
     }
 
@@ -225,9 +232,9 @@ internal sealed class InternalMacroService
                 return;
             }
 
-            foreach (MacroPlanEntry _ in due)
+            foreach (MacroPlanEntry entry in due)
             {
-                directHitInvoker.Invoke();
+                directHitInvoker.Invoke(entry.SeqId, audioSeconds);
             }
         }
         else
@@ -237,9 +244,10 @@ internal sealed class InternalMacroService
                 return;
             }
 
-            InputPatchState.BeginFrame(due.Count);
+            int virtualInputCount = Math.Max(1, settings.VirtualInputKeyCount);
+            InputPatchState.BeginFrame(due.Count * virtualInputCount);
             string seqIds = string.Join(",", due.Select(entry => entry.SeqId.ToString()).ToArray());
-            log($"InputPatch scheduled count={due.Count} audioTime={audioSeconds:F6}s seqID={seqIds}");
+            log($"InputPatch scheduled count={due.Count} virtualKey={settings.VirtualInputKey} virtualKeyCount={virtualInputCount} audioTime={audioSeconds:F6}s seqID={seqIds}");
         }
     }
 }

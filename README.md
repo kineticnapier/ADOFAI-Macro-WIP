@@ -83,6 +83,8 @@ dotnet run --project VKCodeViewer.cs
 
 Unity Mod Managerで読み込むADOFAI内部マクロです。外部SendInput/Pico入力ではなく、`scrController` の内部入力候補に対してReflection/Harmonyで入力を差し込みます。
 
+予定表は `scrLevelMaker.instance.listFloors` から作成し、`seqID <= 0` または `entryTimePitchAdj <= 0.000001` の床は開始直後の誤発火を避けるため除外します。
+
 UMM設定:
 
 - `EnableInternalMacro`: 内部マクロを有効化します。デフォルトはOFFです。
@@ -90,7 +92,10 @@ UMM設定:
 - `MacroOffsetMs`: 予定入力時刻に加えるオフセットです。
 - `StartFromCurrentFloor`: 現在フロア以降から開始します。
 - `UseAudioTime`: `AudioSource.timeSamples / clip.frequency` を基準にします。OFFの場合は現在の音声時刻に固定したUnity unscaled timeを使います。
-- `FireMode`: `DirectHit` は `scrController.instance.Hit(false)` をUMM更新から呼び、`InputPatch` は `scrController.UpdateInput` Prefixで予定入力をセットしてから `ValidInputWasTriggered` と `CountValidKeysPressed` を予定フレームだけ差し替えます。通常は `InputPatch` 推奨です。
+- `FireMode`: `DirectHit` は `scrController.instance.Hit(bool)` をUMM更新から呼び、`InputPatch` は `scrController.UpdateInput` Prefixで予定入力をセットしてから `ValidInputWasTriggered` と `CountValidKeysPressed` を予定フレームだけ差し替えます。通常は `InputPatch` 推奨です。
+- `DirectHitIgnoreInput`: `DirectHit` で `scrController.Hit(bool)` に渡す値です。デフォルトはONです。
+- `VirtualInputKey`: `InputPatch` 用の仮想キー名です。`DirectHit` では使いません。
+- `VirtualInputKeyCount`: `InputPatch` で `CountValidKeysPressed` に返す1予定入力あたりの仮想キー数です。`DirectHit` では使いません。
 
 安全条件として、エディタ再生中またはPlayerControl中のみ動作し、pause中は進行しません。UMM画面や入力欄の操作中はスケジューラを開始しません。
 

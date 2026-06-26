@@ -13,6 +13,7 @@ public static class Main
     private static Harmony? harmony;
     private static UnityModManager.ModEntry? modEntry;
     private static string macroOffsetText = "0";
+    private static string virtualInputKeyCountText = "1";
     private static bool enabled;
 
     public static bool Load(UnityModManager.ModEntry entry)
@@ -20,6 +21,7 @@ public static class Main
         modEntry = entry;
         settings = UnityModManager.ModSettings.Load<InternalMacroSettings>(entry);
         macroOffsetText = settings.MacroOffsetMs.ToString(CultureInfo.InvariantCulture);
+        virtualInputKeyCountText = settings.VirtualInputKeyCount.ToString(CultureInfo.InvariantCulture);
         service = new InternalMacroService(settings, Log);
 
         harmony = new Harmony(entry.Info.Id);
@@ -80,6 +82,22 @@ public static class Main
         GUILayout.EndHorizontal();
 
         GUILayout.Label("InputPatch is recommended. DirectHit is kept for compatibility testing.");
+
+        settings.DirectHitIgnoreInput = GUILayout.Toggle(settings.DirectHitIgnoreInput, "DirectHitIgnoreInput");
+
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("VirtualInputKey", GUILayout.Width(140f));
+        settings.VirtualInputKey = GUILayout.TextField(settings.VirtualInputKey, GUILayout.Width(120f));
+        GUILayout.EndHorizontal();
+
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("VirtualInputKeyCount", GUILayout.Width(140f));
+        virtualInputKeyCountText = GUILayout.TextField(virtualInputKeyCountText, GUILayout.Width(120f));
+        if (int.TryParse(virtualInputKeyCountText, NumberStyles.Integer, CultureInfo.InvariantCulture, out int keyCount))
+        {
+            settings.VirtualInputKeyCount = Math.Max(1, keyCount);
+        }
+        GUILayout.EndHorizontal();
 
         if (GUILayout.Button("Stop scheduler", GUILayout.Width(160f)))
         {

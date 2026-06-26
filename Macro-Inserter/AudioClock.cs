@@ -9,6 +9,7 @@ internal sealed class AudioClock
     private AudioSource? audioSource;
     private double baseAudioSeconds;
     private float baseUnitySeconds;
+    private float lastAudioUnavailableLogTime = -10.0f;
 
     public AudioClock(Action<string> log)
     {
@@ -27,9 +28,9 @@ internal sealed class AudioClock
         }
 
         audioSource = ReflectionCache.FindAudioSource(controller);
-        if (audioSource == null || audioSource.clip == null)
+        if (audioSource == null || audioSource.clip == null || !audioSource.isPlaying)
         {
-            log("AudioSource with a loaded clip was not found.");
+            LogAudioUnavailable(audioSource);
             return false;
         }
 
@@ -43,6 +44,24 @@ internal sealed class AudioClock
         }
 
         return true;
+    }
+
+    private void LogAudioUnavailable(AudioSource? source)
+    {
+        if (Time.unscaledTime - lastAudioUnavailableLogTime < 1.0f)
+        {
+            return;
+        }
+
+        lastAudioUnavailableLogTime = Time.unscaledTime;
+
+        if (source == null || source.clip == null)
+        {
+            log("AudioSource with a loaded clip was not found.");
+            return;
+        }
+
+        log("AudioSource was found but is not playing.");
     }
 
     public bool TryGetSeconds(bool useAudioTime, out double seconds)

@@ -39,6 +39,11 @@ internal sealed class MacroPlanBuilder
                 continue;
             }
 
+            if (seqId <= 0)
+            {
+                continue;
+            }
+
             object? rawTime = ReflectionCache.ReadMember(
                 floor,
                 "entryTimePitchAdj",
@@ -53,6 +58,11 @@ internal sealed class MacroPlanBuilder
             try
             {
                 double entryTimeSeconds = Convert.ToDouble(rawTime);
+                if (entryTimeSeconds <= 0.000001)
+                {
+                    continue;
+                }
+
                 entries.Add(new MacroPlanEntry(seqId, entryTimeSeconds + offsetSeconds));
             }
             catch
@@ -61,9 +71,16 @@ internal sealed class MacroPlanBuilder
             }
         }
 
-        return entries
+        MacroPlanEntry[] plan = entries
             .OrderBy(entry => entry.TargetTimeSeconds)
             .ThenBy(entry => entry.SeqId)
             .ToArray();
+
+        foreach (MacroPlanEntry entry in plan.Take(5))
+        {
+            log($"MacroPlan preview seqID={entry.SeqId} targetTime={entry.TargetTimeSeconds:F6}s");
+        }
+
+        return plan;
     }
 }

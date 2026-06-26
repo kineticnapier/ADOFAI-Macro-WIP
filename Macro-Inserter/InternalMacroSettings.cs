@@ -10,6 +10,9 @@ public sealed class InternalMacroSettings : UnityModManager.ModSettings
     public bool StartFromCurrentFloor = true;
     public bool UseAudioTime = true;
     public FireMode FireMode = FireMode.DirectHit;
+    public bool DirectHitIgnoreInput = true;
+    public string VirtualInputKey = "Space";
+    public int VirtualInputKeyCount = 1;
 
     public override void Save(UnityModManager.ModEntry modEntry)
     {
