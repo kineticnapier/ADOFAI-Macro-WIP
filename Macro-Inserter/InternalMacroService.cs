@@ -28,38 +28,66 @@ internal sealed class InternalMacroService
 
     public void Tick()
     {
+        if (!EnsureRunningForCurrentSettings())
+        {
+            return;
+        }
+
+        if (settings.FireMode == FireMode.InputPatch)
+        {
+            return;
+        }
+
+        FireDueInputsFromModUpdate();
+    }
+
+    public void TickForInputUpdate()
+    {
+        if (settings.FireMode != FireMode.InputPatch)
+        {
+            return;
+        }
+
+        if (!EnsureRunningForCurrentSettings())
+        {
+            return;
+        }
+
+        FireDueInputsForInputPatch();
+    }
+
+    private bool EnsureRunningForCurrentSettings()
+    {
         if (!settings.EnableInternalMacro)
         {
             Stop();
-            return;
+            return false;
         }
 
         if (!RuntimeSafety.IsAllowedPlaybackState())
         {
             Stop();
-            return;
+            return false;
         }
 
         if (RuntimeSafety.IsPaused())
         {
-            return;
+            return false;
         }
 
         if (!running)
         {
-            TryStart();
-            return;
+            return TryStart();
         }
 
         if (runningFireMode != settings.FireMode)
         {
             log("FireMode changed. Restarting internal macro scheduler.");
             Stop();
-            TryStart();
-            return;
+            return TryStart();
         }
 
-        FireDueInputs();
+        return true;
     }
 
     public void Stop()
@@ -76,31 +104,30 @@ internal sealed class InternalMacroService
         log("Internal macro scheduler stopped.");
     }
 
-    private void TryStart()
+    private bool TryStart()
     {
         if (RuntimeSafety.IsUiBlockingStart())
         {
-            return;
+            return false;
         }
 
         if (!audioClock.TryStart(settings.UseAudioTime, out double audioSeconds))
         {
-            return;
+            return false;
         }
 
         plan = planBuilder.Build(settings.MacroOffsetMs);
         if (plan.Count == 0)
         {
             log("Internal macro plan is empty.");
-            return;
+            return false;
         }
 
         nextIndex = ResolveStartIndex(audioSeconds);
         running = true;
         runningFireMode = settings.FireMode;
         log($"Internal macro scheduler started. entries={plan.Count}, startIndex={nextIndex}, audioTime={audioSeconds:F6}s, fireMode={settings.FireMode}, dryRun={settings.DryRun}");
-
-        FireDueInputs();
+        return true;
     }
 
     private int ResolveStartIndex(double audioSeconds)
@@ -141,7 +168,17 @@ internal sealed class InternalMacroService
         return index;
     }
 
-    private void FireDueInputs()
+    private void FireDueInputsFromModUpdate()
+    {
+        FireDueInputs(allowDirectHit: true, allowInputPatch: false);
+    }
+
+    private void FireDueInputsForInputPatch()
+    {
+        FireDueInputs(allowDirectHit: false, allowInputPatch: true);
+    }
+
+    private void FireDueInputs(bool allowDirectHit, bool allowInputPatch)
     {
         if (!audioClock.TryGetSeconds(settings.UseAudioTime, out double audioSeconds))
         {
@@ -183,6 +220,11 @@ internal sealed class InternalMacroService
 
         if (settings.FireMode == FireMode.DirectHit)
         {
+            if (!allowDirectHit)
+            {
+                return;
+            }
+
             foreach (MacroPlanEntry _ in due)
             {
                 directHitInvoker.Invoke();
@@ -190,6 +232,11 @@ internal sealed class InternalMacroService
         }
         else
         {
+            if (!allowInputPatch)
+            {
+                return;
+            }
+
             InputPatchState.BeginFrame(due.Count);
             string seqIds = string.Join(",", due.Select(entry => entry.SeqId.ToString()).ToArray());
             log($"InputPatch scheduled count={due.Count} audioTime={audioSeconds:F6}s seqID={seqIds}");

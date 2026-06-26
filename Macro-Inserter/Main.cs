@@ -23,7 +23,7 @@ public static class Main
         service = new InternalMacroService(settings, Log);
 
         harmony = new Harmony(entry.Info.Id);
-        InputPatches.Apply(harmony, Log);
+        InputPatches.Apply(harmony, Log, () => service);
 
         entry.OnToggle = OnToggle;
         entry.OnGUI = OnGUI;
@@ -78,6 +78,8 @@ public static class Main
         GUILayout.Label("FireMode", GUILayout.Width(140f));
         settings.FireMode = (FireMode)GUILayout.Toolbar((int)settings.FireMode, new[] { "DirectHit", "InputPatch" }, GUILayout.Width(240f));
         GUILayout.EndHorizontal();
+
+        GUILayout.Label("InputPatch is recommended. DirectHit is kept for compatibility testing.");
 
         if (GUILayout.Button("Stop scheduler", GUILayout.Width(160f)))
         {

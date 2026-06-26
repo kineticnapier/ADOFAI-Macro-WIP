@@ -4,7 +4,7 @@ namespace Macro_Inserter;
 
 internal static class InputPatchState
 {
-    private static int validUntilFrame = -1;
+    private static int frame = -1;
     private static int scheduledKeyCount;
 
     public static void BeginFrame(int keyCount)
@@ -14,19 +14,18 @@ internal static class InputPatchState
             return;
         }
 
-        int currentFrame = Time.frameCount;
-        if (currentFrame > validUntilFrame)
+        if (frame != Time.frameCount)
         {
+            frame = Time.frameCount;
             scheduledKeyCount = 0;
         }
 
-        validUntilFrame = currentFrame + 1;
         scheduledKeyCount += keyCount;
     }
 
     public static bool HasScheduledInput()
     {
-        return Time.frameCount <= validUntilFrame && scheduledKeyCount > 0;
+        return frame == Time.frameCount && scheduledKeyCount > 0;
     }
 
     public static bool TryGetScheduledKeyCount(out int keyCount)
@@ -44,12 +43,12 @@ internal static class InputPatchState
     public static void ClearFrame()
     {
         scheduledKeyCount = 0;
-        validUntilFrame = -1;
+        frame = -1;
     }
 
     public static void Reset()
     {
-        validUntilFrame = -1;
+        frame = -1;
         scheduledKeyCount = 0;
     }
 }

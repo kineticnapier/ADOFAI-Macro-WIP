@@ -90,7 +90,7 @@ UMM設定:
 - `MacroOffsetMs`: 予定入力時刻に加えるオフセットです。
 - `StartFromCurrentFloor`: 現在フロア以降から開始します。
 - `UseAudioTime`: `AudioSource.timeSamples / clip.frequency` を基準にします。OFFの場合は現在の音声時刻に固定したUnity unscaled timeを使います。
-- `FireMode`: `DirectHit` は `scrController.instance.Hit(false)` を呼び、`InputPatch` は `ValidInputWasTriggered` と `CountValidKeysPressed` を予定フレームだけ差し替えます。
+- `FireMode`: `DirectHit` は `scrController.instance.Hit(false)` をUMM更新から呼び、`InputPatch` は `scrController.UpdateInput` Prefixで予定入力をセットしてから `ValidInputWasTriggered` と `CountValidKeysPressed` を予定フレームだけ差し替えます。通常は `InputPatch` 推奨です。
 
 安全条件として、エディタ再生中またはPlayerControl中のみ動作し、pause中は進行しません。UMM画面や入力欄の操作中はスケジューラを開始しません。
 
