@@ -83,7 +83,7 @@ dotnet run --project VKCodeViewer.cs
 
 Unity Mod Managerで読み込むADOFAI内部マクロです。外部SendInput/Pico入力ではなく、`scrController` の内部入力候補に対してReflection/Harmonyで入力を差し込みます。
 
-予定表は `scrLevelMaker.instance.listFloors` から作成し、`seqID <= 0` または `entryTimePitchAdj <= 0.000001` の床は開始直後の誤発火を避けるため除外します。
+予定表は `scrLevelMaker.instance.listFloors` から作成し、取得できない場合はシーン上の `scrFloor` 一覧へfallbackします。`seqID <= 0` または `entryTimePitchAdj <= 0.000001` の床は開始直後の誤発火を避けるため除外します。
 
 UMM設定:
 
@@ -98,6 +98,7 @@ UMM設定:
 - `VirtualInputKeyCount`: `InputPatch` で `CountValidKeysPressed` に返す1予定入力あたりの仮想キー数です。`DirectHit` では使いません。
 
 安全条件として、エディタ再生中またはPlayerControl中のみ動作し、pause中は進行しません。UMM画面や入力欄の操作中はスケジューラを開始しません。
+ADOFAI側の初期化が終わっていない間は0.25秒間隔で開始を再試行し、未準備ログは1秒に1回までに抑制します。
 
 ## 注意事項
 

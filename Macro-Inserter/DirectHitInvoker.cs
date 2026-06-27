@@ -39,7 +39,7 @@ internal sealed class DirectHitInvoker
         catch (Exception ex)
         {
             LogInvalidFloorIfNeeded(seqId, audioTime);
-            log($"DirectHit threw {ex.GetType().Name}. seqID={seqId} audioTime={audioTime:F6}s. InputPatch mode is recommended for internal virtual input.");
+            log($"DirectHit threw {ex.GetType().Name}. seqID={seqId} audioTime={audioTime:F6}s. DirectHit is experimental; HitInputEvent mode is recommended.");
             return false;
         }
 
@@ -49,7 +49,7 @@ internal sealed class DirectHitInvoker
             if (!accepted)
             {
                 LogInvalidFloorIfNeeded(seqId, audioTime);
-                log($"DirectHit failed. seqID={seqId} audioTime={audioTime:F6}s. InputPatch mode is recommended for internal virtual input.");
+                log($"DirectHit failed. seqID={seqId} audioTime={audioTime:F6}s. DirectHit is experimental; HitInputEvent mode is recommended.");
             }
 
             return accepted;

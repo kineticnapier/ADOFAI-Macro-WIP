@@ -10,8 +10,10 @@ internal static class RuntimeSafety
 {
     public static bool IsAllowedPlaybackState()
     {
-        bool editorPlayMode;
-        if (ReflectionCache.TryReadBool("scnEditor", out editorPlayMode, "playMode") && editorPlayMode)
+        object? editor = ReflectionCache.GetSingletonInstance("scnEditor");
+        if (editor != null &&
+            ReflectionCache.TryReadBool(editor, out bool editorPlayMode, "playMode") &&
+            editorPlayMode)
         {
             return true;
         }

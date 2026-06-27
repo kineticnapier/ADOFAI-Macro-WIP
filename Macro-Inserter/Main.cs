@@ -15,6 +15,8 @@ public static class Main
     private static string macroOffsetText = "0";
     private static string virtualInputKeyCountText = "1";
     private static bool enabled;
+    private static float lastOnUpdateExceptionLogTime = -10.0f;
+    private static string? lastOnUpdateExceptionSignature;
 
     public static bool Load(UnityModManager.ModEntry entry)
     {
@@ -26,6 +28,7 @@ public static class Main
 
         harmony = new Harmony(entry.Info.Id);
         InputPatches.Apply(harmony, Log, () => service);
+        LifecyclePatches.Apply(harmony, Log, () => service);
 
         entry.OnToggle = OnToggle;
         entry.OnGUI = OnGUI;
@@ -49,12 +52,34 @@ public static class Main
 
     private static void OnUpdate(UnityModManager.ModEntry entry, float delta)
     {
-        if (!enabled)
+        try
+        {
+            if (!enabled)
+            {
+                return;
+            }
+
+            service?.Tick();
+        }
+        catch (Exception ex)
+        {
+            LogOnUpdateException(ex);
+        }
+    }
+
+    private static void LogOnUpdateException(Exception ex)
+    {
+        Exception root = ex.InnerException ?? ex;
+        string signature = $"{ex.GetType().Name}:{root.GetType().Name}:{root.Message}";
+        bool changed = !string.Equals(signature, lastOnUpdateExceptionSignature, StringComparison.Ordinal);
+        if (!changed && Time.unscaledTime - lastOnUpdateExceptionLogTime < 1.0f)
         {
             return;
         }
 
-        service?.Tick();
+        lastOnUpdateExceptionSignature = signature;
+        lastOnUpdateExceptionLogTime = Time.unscaledTime;
+        Log($"OnUpdate suppressed {ex.GetType().Name}: {root.GetType().Name}: {root.Message}");
     }
 
     private static void OnGUI(UnityModManager.ModEntry entry)
@@ -78,10 +103,10 @@ public static class Main
 
         GUILayout.BeginHorizontal();
         GUILayout.Label("FireMode", GUILayout.Width(140f));
-        settings.FireMode = (FireMode)GUILayout.Toolbar((int)settings.FireMode, new[] { "DirectHit", "InputPatch" }, GUILayout.Width(240f));
+        settings.FireMode = (FireMode)GUILayout.Toolbar((int)settings.FireMode, new[] { "HitInputEvent", "DirectHit", "InputPatch" }, GUILayout.Width(360f));
         GUILayout.EndHorizontal();
 
-        GUILayout.Label("InputPatch is recommended. DirectHit is kept for compatibility testing.");
+        GUILayout.Label("HitInputEvent is the default Creplay-style path. DirectHit and InputPatch are fallback/experimental paths.");
 
         settings.DirectHitIgnoreInput = GUILayout.Toggle(settings.DirectHitIgnoreInput, "DirectHitIgnoreInput");
 

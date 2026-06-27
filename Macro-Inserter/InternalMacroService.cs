@@ -1,21 +1,27 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using UnityEngine;
 
 namespace Macro_Inserter;
 
 internal sealed class InternalMacroService
 {
+    private const float StartFailureLogIntervalSeconds = 1.0f;
+
     private readonly InternalMacroSettings settings;
     private readonly Action<string> log;
     private readonly MacroPlanBuilder planBuilder;
     private readonly AudioClock audioClock;
+    private readonly HitInputEventInvoker hitInputEventInvoker;
     private readonly DirectHitInvoker directHitInvoker;
 
     private IReadOnlyList<MacroPlanEntry> plan = Array.Empty<MacroPlanEntry>();
     private int nextIndex;
     private bool running;
     private FireMode runningFireMode;
+    private float lastStartFailureLogTime = -10.0f;
+    private string? lastStartFailureReason;
 
     public InternalMacroService(InternalMacroSettings settings, Action<string> log)
     {
@@ -23,6 +29,7 @@ internal sealed class InternalMacroService
         this.log = log;
         planBuilder = new MacroPlanBuilder(log);
         audioClock = new AudioClock(log);
+        hitInputEventInvoker = new HitInputEventInvoker(log);
         directHitInvoker = new DirectHitInvoker(settings, log);
     }
 
@@ -56,6 +63,28 @@ internal sealed class InternalMacroService
         FireDueInputsForInputPatch();
     }
 
+    public void StartFromRewind()
+    {
+        Stop();
+
+        if (!settings.EnableInternalMacro)
+        {
+            return;
+        }
+
+        if (!RuntimeSafety.IsAllowedPlaybackState())
+        {
+            return;
+        }
+
+        if (RuntimeSafety.IsPaused() || RuntimeSafety.IsUiBlockingStart())
+        {
+            return;
+        }
+
+        TryStart();
+    }
+
     private bool EnsureRunningForCurrentSettings()
     {
         if (!settings.EnableInternalMacro)
@@ -77,14 +106,14 @@ internal sealed class InternalMacroService
 
         if (!running)
         {
-            return TryStart();
+            return false;
         }
 
         if (runningFireMode != settings.FireMode)
         {
-            log("FireMode changed. Restarting internal macro scheduler.");
+            log("FireMode changed. Stopping internal macro scheduler; it will start again after Start_Rewind.");
             Stop();
-            return TryStart();
+            return false;
         }
 
         return true;
@@ -106,20 +135,17 @@ internal sealed class InternalMacroService
 
     private bool TryStart()
     {
-        if (RuntimeSafety.IsUiBlockingStart())
+        MacroPlanBuildResult buildResult = planBuilder.Build(settings.MacroOffsetMs);
+        plan = buildResult.Plan;
+        if (plan.Count == 0)
         {
+            LogStartFailure(buildResult.FailureReason ?? "Internal macro plan is empty.");
             return false;
         }
 
         if (!audioClock.TryStart(settings.UseAudioTime, out double audioSeconds))
         {
-            return false;
-        }
-
-        plan = planBuilder.Build(settings.MacroOffsetMs);
-        if (plan.Count == 0)
-        {
-            log("Internal macro plan is empty.");
+            plan = Array.Empty<MacroPlanEntry>();
             return false;
         }
 
@@ -137,6 +163,19 @@ internal sealed class InternalMacroService
         return true;
     }
 
+    private void LogStartFailure(string reason)
+    {
+        bool reasonChanged = !string.Equals(reason, lastStartFailureReason, StringComparison.Ordinal);
+        if (!reasonChanged && Time.unscaledTime - lastStartFailureLogTime < StartFailureLogIntervalSeconds)
+        {
+            return;
+        }
+
+        lastStartFailureReason = reason;
+        lastStartFailureLogTime = Time.unscaledTime;
+        log(reason);
+    }
+
     private int ResolveStartIndex(double audioSeconds)
     {
         int byTime = FindFirstAtOrAfterAudioTime(audioSeconds);
@@ -145,9 +184,7 @@ internal sealed class InternalMacroService
             return byTime;
         }
 
-        object? controller = ReflectionCache.GetSingletonInstance("scrController");
-        if (controller == null ||
-            !ReflectionCache.TryReadInt(controller, out int currentFloor, "currFloor", "currentFloor", "seqID", "floor"))
+        if (!TryReadCurrentFloorSeqId(out int currentFloor))
         {
             return byTime;
         }
@@ -199,8 +236,17 @@ internal sealed class InternalMacroService
             return;
         }
 
+        if (!TryReadCurrentFloorSeqId(out int currentFloorSeqId))
+        {
+            log("Current currFloor.seqID was not available. Stopping internal macro scheduler.");
+            Stop();
+            return;
+        }
+
         List<MacroPlanEntry> due = new();
-        while (nextIndex < plan.Count && plan[nextIndex].TargetTimeSeconds <= audioSeconds)
+        while (nextIndex < plan.Count &&
+               plan[nextIndex].TargetTimeSeconds <= audioSeconds &&
+               plan[nextIndex].SeqId <= currentFloorSeqId)
         {
             due.Add(plan[nextIndex]);
             nextIndex++;
@@ -216,7 +262,7 @@ internal sealed class InternalMacroService
             double diffMs = (audioSeconds - entry.TargetTimeSeconds) * 1000.0;
             if (settings.DryRun)
             {
-                log($"DryRun targetTime={entry.TargetTimeSeconds:F6}s audioTime={audioSeconds:F6}s diffMs={diffMs:F3} seqID={entry.SeqId}");
+                log($"DryRun targetTime={entry.TargetTimeSeconds:F6}s audioTime={audioSeconds:F6}s diffMs={diffMs:F3} seqID={entry.SeqId} currFloorSeqID={currentFloorSeqId}");
             }
         }
 
@@ -225,7 +271,19 @@ internal sealed class InternalMacroService
             return;
         }
 
-        if (settings.FireMode == FireMode.DirectHit)
+        if (settings.FireMode == FireMode.HitInputEvent)
+        {
+            if (!allowDirectHit)
+            {
+                return;
+            }
+
+            foreach (MacroPlanEntry entry in due)
+            {
+                hitInputEventInvoker.Invoke(entry.SeqId, audioSeconds);
+            }
+        }
+        else if (settings.FireMode == FireMode.DirectHit)
         {
             if (!allowDirectHit)
             {
@@ -247,7 +305,31 @@ internal sealed class InternalMacroService
             int virtualInputCount = Math.Max(1, settings.VirtualInputKeyCount);
             InputPatchState.BeginFrame(due.Count * virtualInputCount);
             string seqIds = string.Join(",", due.Select(entry => entry.SeqId.ToString()).ToArray());
-            log($"InputPatch scheduled count={due.Count} virtualKey={settings.VirtualInputKey} virtualKeyCount={virtualInputCount} audioTime={audioSeconds:F6}s seqID={seqIds}");
+            log($"InputPatch scheduled count={due.Count} virtualKey={settings.VirtualInputKey} virtualKeyCount={virtualInputCount} audioTime={audioSeconds:F6}s currFloorSeqID={currentFloorSeqId} seqID={seqIds}");
         }
+    }
+
+    private static bool TryReadCurrentFloorSeqId(out int seqId)
+    {
+        seqId = 0;
+        object? controller = ReflectionCache.GetSingletonInstance("scrController");
+        if (controller == null)
+        {
+            return false;
+        }
+
+        object? currFloor = ReflectionCache.ReadMember(controller, "currFloor", "currentFloor");
+        if (currFloor == null)
+        {
+            return ReflectionCache.TryReadInt(controller, out seqId, "floor", "seqID", "currentFloorSeqID");
+        }
+
+        if (currFloor is int intValue)
+        {
+            seqId = intValue;
+            return true;
+        }
+
+        return ReflectionCache.TryReadInt(currFloor, out seqId, "seqID", "seqId", "floorSeqID");
     }
 }
