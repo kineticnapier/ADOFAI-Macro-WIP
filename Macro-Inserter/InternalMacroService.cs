@@ -15,9 +15,11 @@ internal sealed class InternalMacroService
     private const float FireSkipLogIntervalSeconds = 1.0f;
     private const double StaleClockStartMarginSeconds = 5.0;
     private const int AdaptiveDiffWindowSize = 30;
-    private const double AdaptiveScale = 0.05;
-    private const double AdaptiveMaxStepMs = 0.5;
+    private const double AdaptiveLerpFactor = 0.05;
     private const double AdaptiveMaxAbsMs = 30.0;
+    private const float DuplicateStartRewindWindowSeconds = 0.5f;
+    private const double RestartClockResetSeconds = 0.2;
+    private const double RestartClockBackstepSeconds = 0.5;
 
     private readonly InternalMacroSettings settings;
     private readonly Action<string> log;
@@ -44,21 +46,23 @@ internal sealed class InternalMacroService
     private float lastClockResetWaitLogTime = -10.0f;
     private float lastPlayerControlTickLogTime = -10.0f;
     private float lastFireSkipLogTime = -10.0f;
+    private float lastStartRewindUnityTime = -10.0f;
+    private double lastStartRewindClockTime = -1.0;
     private bool firstInputPatchScheduled;
     private int hitDiffSampleCount;
     private double hitDiffTotalMs;
     private double hitDiffMaxAbsMs;
     private readonly Queue<double> recentDirectHitDiffMs = new();
     private double adaptiveOffsetMs;
-    private double medianDiffMs;
+    private double medianDispatchLagMs;
     private bool suppressNextAdaptiveCorrection;
 
     public int HitDiffSampleCount => hitDiffSampleCount;
     public double AverageHitDiffMs => hitDiffSampleCount == 0 ? 0.0 : hitDiffTotalMs / hitDiffSampleCount;
     public double MaxAbsHitDiffMs => hitDiffMaxAbsMs;
     public double AdaptiveOffsetMs => adaptiveOffsetMs;
-    public double EffectiveOffsetMs => settings.MacroOffsetMs + adaptiveOffsetMs;
-    public double MedianDiffMs => medianDiffMs;
+    public double EffectiveOffsetMs => settings.MacroOffsetMs + (settings.EnableAdaptiveOffset ? adaptiveOffsetMs : 0.0);
+    public double MedianDispatchLagMs => medianDispatchLagMs;
     public int DetectedMidspinCount => cachedDetectedMidspinCount;
     public int SkippedDuplicateTimeCount => cachedSkippedDuplicateTimeCount;
 
@@ -173,6 +177,32 @@ internal sealed class InternalMacroService
             return;
         }
 
+        bool hasClock = audioClock.TryReadCurrentSeconds(settings.ClockMode, out double clockSeconds);
+        bool hasCurrentFloor = TryReadCurrentFloorSeqId(out int currentFloor);
+        if ((running || armed) &&
+            IsDuplicateStartRewind(hasClock, clockSeconds, hasCurrentFloor, currentFloor, out string duplicateReason))
+        {
+            LogStartRewindReceived(
+                running,
+                armed,
+                hasCurrentFloor,
+                currentFloor,
+                hasClock,
+                clockSeconds,
+                action: $"ignored {duplicateReason}");
+            RecordStartRewindState(hasClock, clockSeconds);
+            return;
+        }
+
+        LogStartRewindReceived(
+            running,
+            armed,
+            hasCurrentFloor,
+            currentFloor,
+            hasClock,
+            clockSeconds,
+            action: "rearm");
+        RecordStartRewindState(hasClock, clockSeconds);
         Stop("start rewind");
         BuildPlanAndArm();
     }
@@ -205,6 +235,77 @@ internal sealed class InternalMacroService
         }
 
         return true;
+    }
+
+    private bool IsDuplicateStartRewind(
+        bool hasClock,
+        double clockSeconds,
+        bool hasCurrentFloor,
+        int currentFloor,
+        out string reason)
+    {
+        reason = "duplicate";
+        bool clockReset = hasClock && clockSeconds < RestartClockResetSeconds;
+        bool floorReset = hasCurrentFloor && currentFloor <= 0;
+        bool clockBackstepped = hasClock &&
+                                lastStartRewindClockTime >= 0.0 &&
+                                clockSeconds < lastStartRewindClockTime - RestartClockBackstepSeconds;
+        if (clockReset || floorReset || clockBackstepped)
+        {
+            reason = "restart";
+            return false;
+        }
+
+        if (Time.unscaledTime - lastStartRewindUnityTime < DuplicateStartRewindWindowSeconds)
+        {
+            reason = "duplicate-window";
+            return true;
+        }
+
+        if (hasCurrentFloor &&
+            currentFloor >= 1 &&
+            hasClock &&
+            clockSeconds > DuplicateStartRewindWindowSeconds)
+        {
+            reason = "playback-active";
+            return true;
+        }
+
+        if (hasClock &&
+            lastStartRewindClockTime >= 0.0 &&
+            clockSeconds >= lastStartRewindClockTime - 0.050)
+        {
+            reason = "clock-not-reset";
+            return true;
+        }
+
+        return false;
+    }
+
+    private void RecordStartRewindState(bool hasClock, double clockSeconds)
+    {
+        lastStartRewindUnityTime = Time.unscaledTime;
+        if (hasClock)
+        {
+            lastStartRewindClockTime = clockSeconds;
+        }
+    }
+
+    private void LogStartRewindReceived(
+        bool wasRunning,
+        bool wasArmed,
+        bool hasCurrentFloor,
+        int currentFloor,
+        bool hasClock,
+        double clockSeconds,
+        string action)
+    {
+        string currentFloorText = hasCurrentFloor ? currentFloor.ToString() : "<unavailable>";
+        string clockText = hasClock ? $"{clockSeconds:F6}s" : "<unavailable>";
+        string lastClockText = lastStartRewindClockTime >= 0.0
+            ? $"{lastStartRewindClockTime:F6}s"
+            : "<none>";
+        log($"Start_Rewind received. running={wasRunning} armed={wasArmed} currentFloor={currentFloorText} clockTime={clockText} lastStartRewindClockTime={lastClockText} action={action}");
     }
 
     public void Stop(string reason)
@@ -687,7 +788,8 @@ internal sealed class InternalMacroService
 
     private double GetEffectiveTargetTimeSeconds(MacroPlanEntry entry)
     {
-        return entry.TargetTimeSeconds + adaptiveOffsetMs / 1000.0;
+        double adaptiveSeconds = settings.EnableAdaptiveOffset ? adaptiveOffsetMs / 1000.0 : 0.0;
+        return entry.TargetTimeSeconds + adaptiveSeconds;
     }
 
     private void LogHitResult(int currentFloorSeqId, HitInvokeResult result)
@@ -716,7 +818,7 @@ internal sealed class InternalMacroService
         hitDiffTotalMs = 0.0;
         hitDiffMaxAbsMs = 0.0;
         recentDirectHitDiffMs.Clear();
-        medianDiffMs = 0.0;
+        medianDispatchLagMs = 0.0;
     }
 
     private void ResetAdaptiveOffset()
@@ -727,6 +829,11 @@ internal sealed class InternalMacroService
 
     private void UpdateAdaptiveOffsetAfterDirectHit(double diffMs, int dueCount, MacroPlanEntry entry)
     {
+        if (!settings.EnableAdaptiveOffset)
+        {
+            return;
+        }
+
         if (dueCount > 1 ||
             entry.IsMidspin ||
             entry.IsNearMidspin ||
@@ -742,15 +849,15 @@ internal sealed class InternalMacroService
             recentDirectHitDiffMs.Dequeue();
         }
 
-        medianDiffMs = CalculateMedian(recentDirectHitDiffMs);
+        medianDispatchLagMs = CalculateMedian(recentDirectHitDiffMs);
 
-        double correctionMs = Math.Max(
-            -AdaptiveMaxStepMs,
-            Math.Min(AdaptiveMaxStepMs, -medianDiffMs * AdaptiveScale));
+        double targetAdaptiveOffsetMs = -medianDispatchLagMs;
+        double nextAdaptiveOffsetMs = adaptiveOffsetMs +
+                                      (targetAdaptiveOffsetMs - adaptiveOffsetMs) * AdaptiveLerpFactor;
         adaptiveOffsetMs = Math.Max(
             -AdaptiveMaxAbsMs,
-            Math.Min(AdaptiveMaxAbsMs, adaptiveOffsetMs + correctionMs));
-        LogVerbose($"AdaptiveOffset updated. medianDiffMs={medianDiffMs:F3} correctionMs={correctionMs:F3} adaptiveOffsetMs={adaptiveOffsetMs:F3} effectiveOffsetMs={EffectiveOffsetMs:F3}");
+            Math.Min(AdaptiveMaxAbsMs, nextAdaptiveOffsetMs));
+        LogVerbose($"AdaptiveOffset dispatch-lag updated. medianDispatchLagMs={medianDispatchLagMs:F3} targetAdaptiveOffsetMs={targetAdaptiveOffsetMs:F3} adaptiveOffsetMs={adaptiveOffsetMs:F3} effectiveOffsetMs={EffectiveOffsetMs:F3}");
     }
 
     private static double CalculateMedian(IEnumerable<double> values)

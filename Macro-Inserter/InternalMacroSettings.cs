@@ -16,6 +16,7 @@ public sealed class InternalMacroSettings : UnityModManager.ModSettings
     public LoggingMode LoggingMode = LoggingMode.Minimal;
     public FailureMode FailureMode = FailureMode.Stop;
     public double MaxLateRetryMs = 250.0;
+    public bool EnableAdaptiveOffset = false;
     public bool ValidateAfterHit = false;
     public bool DirectHitIgnoreInput = true;
     public string VirtualInputKey = "Space";

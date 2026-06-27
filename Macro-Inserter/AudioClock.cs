@@ -138,6 +138,21 @@ internal sealed class AudioClock
         return true;
     }
 
+    public bool TryReadCurrentSeconds(ClockMode mode, out double seconds)
+    {
+        seconds = 0.0;
+        object? previousConductor = conductor;
+        AudioSource? previousAudioSource = audioSource;
+
+        conductor = ReflectionCache.GetSingletonInstance("scrConductor");
+        audioSource ??= FindSongAudioSource();
+        bool result = TryGetSeconds(mode, out seconds);
+
+        conductor = previousConductor ?? conductor;
+        audioSource = previousAudioSource ?? audioSource;
+        return result;
+    }
+
     private void LogClockReady(ClockMode mode, double clockSeconds)
     {
         log($"Clock ready: type={mode} time={clockSeconds:F6}s");
