@@ -194,7 +194,7 @@ internal sealed class InternalMacroService
         bool hasClock = audioClock.TryReadCurrentSeconds(settings.ClockMode, out double clockSeconds);
         bool hasCurrentFloor = TryReadCurrentFloorSeqId(out int currentFloor);
         if ((running || armed) &&
-            IsDuplicateStartRewind(hasClock, clockSeconds, hasCurrentFloor, currentFloor, out string duplicateReason))
+            IsDuplicateStartRewind(running, armed, hasClock, clockSeconds, out string duplicateReason))
         {
             LogStartRewindReceived(
                 running,
@@ -252,22 +252,27 @@ internal sealed class InternalMacroService
     }
 
     private bool IsDuplicateStartRewind(
+        bool isRunning,
+        bool isArmed,
         bool hasClock,
         double clockSeconds,
-        bool hasCurrentFloor,
-        int currentFloor,
         out string reason)
     {
         reason = "duplicate";
         bool clockReset = hasClock && clockSeconds < RestartClockResetSeconds;
-        bool floorReset = hasCurrentFloor && currentFloor <= 0;
         bool clockBackstepped = hasClock &&
                                 lastStartRewindClockTime >= 0.0 &&
                                 clockSeconds < lastStartRewindClockTime - RestartClockBackstepSeconds;
-        if (clockReset || floorReset || clockBackstepped)
+        if (clockReset || clockBackstepped)
         {
             reason = "restart";
             return false;
+        }
+
+        if (isRunning)
+        {
+            reason = "playback-active";
+            return true;
         }
 
         if (Time.unscaledTime - lastStartRewindUnityTime < DuplicateStartRewindWindowSeconds)
@@ -276,9 +281,13 @@ internal sealed class InternalMacroService
             return true;
         }
 
-        if (hasCurrentFloor &&
-            currentFloor >= 1 &&
-            hasClock &&
+        if (isArmed)
+        {
+            reason = "armed";
+            return true;
+        }
+
+        if (hasClock &&
             clockSeconds > DuplicateStartRewindWindowSeconds)
         {
             reason = "playback-active";
@@ -746,7 +755,7 @@ internal sealed class InternalMacroService
                 break;
             }
 
-            if (diffMs > settings.MaxLateRetryMs)
+            if (diffMs > GetActiveMaxLateRetryMs())
             {
                 suppressNextAdaptiveCorrection = true;
                 if (HandleHitFailedTooLate(entry, clockSeconds, diffMs, "entry too late before hit"))
@@ -897,6 +906,7 @@ internal sealed class InternalMacroService
             !settings.EnableHighDensityFastPath ||
             settings.ValidateAfterHit ||
             settings.DryRun ||
+            settings.ExperimentalTimeSpoofForDirectHit ||
             !directHitInvoker.CanUseFastPath())
         {
             return false;
@@ -909,9 +919,10 @@ internal sealed class InternalMacroService
 
         if (currentFloorSeqId != expectedFloorSeqId)
         {
-            log($"FastPath validation failed before burst. expectedFloor={expectedFloorSeqId} actualFloor={currentFloorSeqId}");
-            Stop("fast path floor mismatch");
-            return true;
+            LogVerbose($"FastPath validation mismatch before burst; falling back to normal DirectHit. expectedFloor={expectedFloorSeqId} actualFloor={currentFloorSeqId}");
+            expectedFloorSeqId = currentFloorSeqId;
+            fastPathHitsSinceValidation = 0;
+            return false;
         }
 
         int maxHits = Math.Max(1, maxHitsThisUpdate);
@@ -932,7 +943,7 @@ internal sealed class InternalMacroService
             }
 
             double diffMs = (clockSeconds - effectiveTargetTimeSeconds) * 1000.0;
-            if (diffMs > settings.MaxLateRetryMs)
+            if (diffMs > GetActiveMaxLateRetryMs())
             {
                 suppressNextAdaptiveCorrection = true;
                 if (HandleHitFailedTooLate(entry, clockSeconds, diffMs, "fast path entry too late before hit"))
@@ -963,9 +974,8 @@ internal sealed class InternalMacroService
 
             if (!directHitInvoker.TryInvokeFast(effectiveTargetTimeSeconds, out bool accepted) || !accepted)
             {
-                log($"FastPath DirectHit failed. seqID={entry.SeqId} expectedFloor={expectedFloorSeqId} targetTime={effectiveTargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s");
-                Stop("fast path direct hit failed");
-                return true;
+                LogVerbose($"FastPath DirectHit failed; falling back when safe. seqID={entry.SeqId} expectedFloor={expectedFloorSeqId} targetTime={effectiveTargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s hitsThisUpdate={hitsThisUpdate}");
+                return hitsThisUpdate > 0;
             }
 
             RecordHitDiff(diffMs);
@@ -1039,6 +1049,13 @@ internal sealed class InternalMacroService
         return settings.EnableHighDensityMode
             ? Math.Max(1, settings.MaxHitsPerPlayerControlUpdate)
             : 1;
+    }
+
+    private double GetActiveMaxLateRetryMs()
+    {
+        return settings.EnableHighDensityMode
+            ? settings.HighDensityMaxLateRetryMs
+            : settings.MaxLateRetryMs;
     }
 
     private bool HandleDueCountTooLarge(int dueCount, int maxHitsThisUpdate, double clockSeconds)
@@ -1218,7 +1235,8 @@ internal sealed class InternalMacroService
 
     private bool HandleHitFailedTooLate(MacroPlanEntry entry, double clockSeconds, double diffMs, string reason)
     {
-        if (diffMs <= settings.MaxLateRetryMs)
+        double maxLateRetryMs = GetActiveMaxLateRetryMs();
+        if (diffMs <= maxLateRetryMs)
         {
             return false;
         }
@@ -1226,12 +1244,12 @@ internal sealed class InternalMacroService
         suppressNextAdaptiveCorrection = true;
         if (settings.FailureMode == FailureMode.Skip)
         {
-            log($"tooLateSkipped: reason={reason} seqID={entry.SeqId} targetTime={entry.TargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s diffMs={diffMs:F3} maxLateRetryMs={settings.MaxLateRetryMs:F3}");
+            log($"tooLateSkipped: reason={reason} seqID={entry.SeqId} targetTime={entry.TargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s diffMs={diffMs:F3} maxLateRetryMs={maxLateRetryMs:F3}");
             nextIndex++;
             return true;
         }
 
-        log($"tooLateStopped: reason={reason} seqID={entry.SeqId} targetTime={entry.TargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s diffMs={diffMs:F3} maxLateRetryMs={settings.MaxLateRetryMs:F3}");
+        log($"tooLateStopped: reason={reason} seqID={entry.SeqId} targetTime={entry.TargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s diffMs={diffMs:F3} maxLateRetryMs={maxLateRetryMs:F3}");
         Stop("hit failed too late");
         return true;
     }

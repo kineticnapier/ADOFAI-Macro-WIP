@@ -13,7 +13,8 @@ public static class Main
     private static Harmony? harmony;
     private static UnityModManager.ModEntry? modEntry;
     private static string macroOffsetText = "0";
-    private static string maxLateRetryMsText = "40";
+    private static string maxLateRetryMsText = "250";
+    private static string highDensityMaxLateRetryMsText = "60";
     private static string maxHitsPerPlayerControlUpdateText = "64";
     private static string validateEveryHitsText = "32";
     private static string virtualInputKeyCountText = "1";
@@ -28,6 +29,7 @@ public static class Main
         settings = UnityModManager.ModSettings.Load<InternalMacroSettings>(entry);
         macroOffsetText = settings.MacroOffsetMs.ToString(CultureInfo.InvariantCulture);
         maxLateRetryMsText = settings.MaxLateRetryMs.ToString(CultureInfo.InvariantCulture);
+        highDensityMaxLateRetryMsText = settings.HighDensityMaxLateRetryMs.ToString(CultureInfo.InvariantCulture);
         maxHitsPerPlayerControlUpdateText = settings.MaxHitsPerPlayerControlUpdate.ToString(CultureInfo.InvariantCulture);
         validateEveryHitsText = settings.ValidateEveryHits.ToString(CultureInfo.InvariantCulture);
         virtualInputKeyCountText = settings.VirtualInputKeyCount.ToString(CultureInfo.InvariantCulture);
@@ -93,6 +95,7 @@ public static class Main
     {
         GUILayout.BeginVertical("box");
         GUILayout.Label("Internal macro is for chart verification only. Do not use it for competition, submission, or ranking purposes.");
+        GUILayout.Label("Stable baseline: DirectHit + ManualFirstHit, HighDensity OFF, FastPath OFF, TimeSpoof OFF, Adaptive OFF, MaxLateRetryMs 250.");
 
         settings.EnableInternalMacro = GUILayout.Toggle(settings.EnableInternalMacro, "EnableInternalMacro");
         settings.DryRun = GUILayout.Toggle(settings.DryRun, "DryRun");
@@ -148,6 +151,15 @@ public static class Main
         }
         GUILayout.EndHorizontal();
 
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("HighDensityLateMs", GUILayout.Width(140f));
+        highDensityMaxLateRetryMsText = GUILayout.TextField(highDensityMaxLateRetryMsText, GUILayout.Width(120f));
+        if (double.TryParse(highDensityMaxLateRetryMsText, NumberStyles.Float, CultureInfo.InvariantCulture, out double highDensityMaxLateRetryMs))
+        {
+            settings.HighDensityMaxLateRetryMs = Math.Max(0.0, highDensityMaxLateRetryMs);
+        }
+        GUILayout.EndHorizontal();
+
         settings.EnableHighDensityMode = GUILayout.Toggle(settings.EnableHighDensityMode, "EnableHighDensityMode");
         settings.EnableHighDensityFastPath = GUILayout.Toggle(settings.EnableHighDensityFastPath, "FastPath enabled (BurstDirectHit)");
         GUILayout.BeginHorizontal();
@@ -167,6 +179,7 @@ public static class Main
             settings.ValidateEveryHits = Math.Max(1, validateEveryHits);
         }
         GUILayout.EndHorizontal();
+        GUILayout.Label("FastPath validation: 32 for speed tests; use 1-4 while debugging instability.");
 
         settings.ExperimentalTimeSpoofForDirectHit = GUILayout.Toggle(settings.ExperimentalTimeSpoofForDirectHit, "ExperimentalTimeSpoofForDirectHit");
         GUILayout.Label("TimeSpoof temporarily writes conductor songposition during DirectHit. Experimental; leave off unless testing ultra-high density.");
