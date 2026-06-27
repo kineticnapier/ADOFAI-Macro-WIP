@@ -259,6 +259,7 @@ internal sealed class InternalMacroService
         out string reason)
     {
         reason = "duplicate";
+        bool schedulerActive = isRunning || isArmed;
         bool clockReset = hasClock && clockSeconds < RestartClockResetSeconds;
         bool clockBackstepped = hasClock &&
                                 lastStartRewindClockTime >= 0.0 &&
@@ -269,21 +270,15 @@ internal sealed class InternalMacroService
             return false;
         }
 
-        if (isRunning)
+        if (schedulerActive)
         {
-            reason = "playback-active";
+            reason = "scheduler-active";
             return true;
         }
 
         if (Time.unscaledTime - lastStartRewindUnityTime < DuplicateStartRewindWindowSeconds)
         {
             reason = "duplicate-window";
-            return true;
-        }
-
-        if (isArmed)
-        {
-            reason = "armed";
             return true;
         }
 
