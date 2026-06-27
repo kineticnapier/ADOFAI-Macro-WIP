@@ -15,19 +15,33 @@ internal static class ReflectionCache
     private static readonly BindingFlags StaticFlags =
         BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
 
+    private static readonly Dictionary<string, Type?> TypeCache = new();
+    private static readonly Dictionary<Assembly, Type[]> AssemblyTypesCache = new();
+    private static readonly Dictionary<string, MethodInfo?> MethodCache = new();
+    private static readonly Dictionary<string, IReadOnlyList<MethodInfo>> MethodsCache = new();
+    private static readonly Dictionary<string, MemberInfo?> ReadMemberCache = new();
+    private static readonly Dictionary<string, MemberInfo?> WriteMemberCache = new();
+
     public static Type? FindType(string typeName)
     {
+        if (TypeCache.TryGetValue(typeName, out Type? cachedType))
+        {
+            return cachedType;
+        }
+
         foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
         {
             Type? type = assembly.GetType(typeName, throwOnError: false);
             if (type != null)
             {
+                TypeCache[typeName] = type;
                 return type;
             }
 
             type = GetLoadableTypes(assembly).FirstOrDefault(candidate => candidate.Name == typeName);
             if (type != null)
             {
+                TypeCache[typeName] = type;
                 return type;
             }
         }
@@ -37,13 +51,22 @@ internal static class ReflectionCache
 
     private static Type[] GetLoadableTypes(Assembly assembly)
     {
+        if (AssemblyTypesCache.TryGetValue(assembly, out Type[] cachedTypes))
+        {
+            return cachedTypes;
+        }
+
         try
         {
-            return assembly.GetTypes();
+            Type[] types = assembly.GetTypes();
+            AssemblyTypesCache[assembly] = types;
+            return types;
         }
         catch (ReflectionTypeLoadException ex)
         {
-            return ex.Types.Where(type => type != null).Cast<Type>().ToArray();
+            Type[] types = ex.Types.Where(type => type != null).Cast<Type>().ToArray();
+            AssemblyTypesCache[assembly] = types;
+            return types;
         }
     }
 
@@ -60,6 +83,12 @@ internal static class ReflectionCache
 
     public static MethodInfo? FindMethod(string typeName, string methodName)
     {
+        string key = $"{typeName}.{methodName}";
+        if (MethodCache.TryGetValue(key, out MethodInfo? cachedMethod))
+        {
+            return cachedMethod;
+        }
+
         Type? type = FindType(typeName);
         if (type == null)
         {
@@ -68,38 +97,64 @@ internal static class ReflectionCache
 
         try
         {
-            return type.GetMethod(methodName, InstanceFlags | StaticFlags);
+            MethodInfo? method = type.GetMethod(methodName, InstanceFlags | StaticFlags);
+            MethodCache[key] = method;
+            return method;
         }
         catch (AmbiguousMatchException)
         {
-            return type
+            MethodInfo? method = type
                 .GetMethods(InstanceFlags | StaticFlags)
                 .FirstOrDefault(method => method.Name == methodName);
+            MethodCache[key] = method;
+            return method;
         }
     }
 
     public static MethodInfo? FindMethod(string typeName, string methodName, params Type[] parameterTypes)
     {
-        return FindType(typeName)?.GetMethod(
+        string key = $"{typeName}.{methodName}({string.Join(",", parameterTypes.Select(type => type.FullName).ToArray())})";
+        if (MethodCache.TryGetValue(key, out MethodInfo? cachedMethod))
+        {
+            return cachedMethod;
+        }
+
+        Type? type = FindType(typeName);
+        if (type == null)
+        {
+            return null;
+        }
+
+        MethodInfo? method = type.GetMethod(
             methodName,
             InstanceFlags | StaticFlags,
             binder: null,
             types: parameterTypes,
             modifiers: null);
+        MethodCache[key] = method;
+        return method;
     }
 
     public static IReadOnlyList<MethodInfo> FindMethods(string typeName, string methodName)
     {
+        string key = $"{typeName}.{methodName}:all";
+        if (MethodsCache.TryGetValue(key, out IReadOnlyList<MethodInfo> cachedMethods))
+        {
+            return cachedMethods;
+        }
+
         Type? type = FindType(typeName);
         if (type == null)
         {
             return Array.Empty<MethodInfo>();
         }
 
-        return type
+        IReadOnlyList<MethodInfo> methods = type
             .GetMethods(InstanceFlags | StaticFlags)
             .Where(method => method.Name == methodName)
             .ToArray();
+        MethodsCache[key] = methods;
+        return methods;
     }
 
     public static IReadOnlyList<MethodInfo> FindGameMethodsByName(string methodName)
@@ -133,8 +188,8 @@ internal static class ReflectionCache
     {
         foreach (string name in names)
         {
-            FieldInfo? field = type.GetField(name, InstanceFlags | StaticFlags);
-            if (field != null)
+            MemberInfo? member = ResolveReadableMember(type, name);
+            if (member is FieldInfo field)
             {
                 if (instance == null && !field.IsStatic)
                 {
@@ -151,8 +206,7 @@ internal static class ReflectionCache
                 }
             }
 
-            PropertyInfo? property = type.GetProperty(name, InstanceFlags | StaticFlags);
-            if (property != null && property.GetIndexParameters().Length == 0)
+            if (member is PropertyInfo property)
             {
                 MethodInfo? getter = property.GetGetMethod(nonPublic: true);
                 if (getter == null)
@@ -184,8 +238,8 @@ internal static class ReflectionCache
         Type type = instance.GetType();
         foreach (string name in names)
         {
-            FieldInfo? field = type.GetField(name, InstanceFlags | StaticFlags);
-            if (field != null)
+            MemberInfo? member = ResolveWritableMember(type, name);
+            if (member is FieldInfo field)
             {
                 if (field.IsInitOnly || field.IsLiteral)
                 {
@@ -203,32 +257,96 @@ internal static class ReflectionCache
                 }
             }
 
-            PropertyInfo? property = type.GetProperty(name, InstanceFlags | StaticFlags);
-            if (property == null ||
-                !property.CanWrite ||
-                property.GetIndexParameters().Length != 0)
+            if (member is PropertyInfo property)
             {
-                continue;
-            }
+                MethodInfo? setter = property.GetSetMethod(nonPublic: true);
+                if (setter == null)
+                {
+                    continue;
+                }
 
-            MethodInfo? setter = property.GetSetMethod(nonPublic: true);
-            if (setter == null)
-            {
-                continue;
-            }
-
-            try
-            {
-                property.SetValue(setter.IsStatic ? null : instance, CoerceValue(value, property.PropertyType), null);
-                return true;
-            }
-            catch
-            {
-                continue;
+                try
+                {
+                    property.SetValue(setter.IsStatic ? null : instance, CoerceValue(value, property.PropertyType), null);
+                    return true;
+                }
+                catch
+                {
+                    continue;
+                }
             }
         }
 
         return false;
+    }
+
+    public static void WarmupMembers(string typeName, params string[] names)
+    {
+        Type? type = FindType(typeName);
+        if (type == null)
+        {
+            return;
+        }
+
+        foreach (string name in names)
+        {
+            ResolveReadableMember(type, name);
+            ResolveWritableMember(type, name);
+        }
+    }
+
+    private static MemberInfo? ResolveReadableMember(Type type, string name)
+    {
+        string key = $"{type.FullName}:read:{name}";
+        if (ReadMemberCache.TryGetValue(key, out MemberInfo? cachedMember))
+        {
+            return cachedMember;
+        }
+
+        FieldInfo? field = type.GetField(name, InstanceFlags | StaticFlags);
+        if (field != null)
+        {
+            ReadMemberCache[key] = field;
+            return field;
+        }
+
+        PropertyInfo? property = type.GetProperty(name, InstanceFlags | StaticFlags);
+        if (property != null && property.GetIndexParameters().Length == 0)
+        {
+            ReadMemberCache[key] = property;
+            return property;
+        }
+
+        ReadMemberCache[key] = null;
+        return null;
+    }
+
+    private static MemberInfo? ResolveWritableMember(Type type, string name)
+    {
+        string key = $"{type.FullName}:write:{name}";
+        if (WriteMemberCache.TryGetValue(key, out MemberInfo? cachedMember))
+        {
+            return cachedMember;
+        }
+
+        FieldInfo? field = type.GetField(name, InstanceFlags | StaticFlags);
+        if (field != null && !field.IsInitOnly && !field.IsLiteral)
+        {
+            WriteMemberCache[key] = field;
+            return field;
+        }
+
+        PropertyInfo? property = type.GetProperty(name, InstanceFlags | StaticFlags);
+        if (property != null &&
+            property.CanWrite &&
+            property.GetIndexParameters().Length == 0)
+        {
+            WriteMemberCache[key] = property;
+            return property;
+        }
+
+        WriteMemberCache[key] = null;
+        return null;
     }
 
     private static object? CoerceValue(object? value, Type destinationType)

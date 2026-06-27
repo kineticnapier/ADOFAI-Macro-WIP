@@ -23,6 +23,9 @@ internal sealed class InternalMacroService
     private readonly DirectHitInvoker directHitInvoker;
 
     private IReadOnlyList<MacroPlanEntry> plan = Array.Empty<MacroPlanEntry>();
+    private IReadOnlyList<MacroPlanEntry> cachedPlan = Array.Empty<MacroPlanEntry>();
+    private double cachedPlanOffsetMs = double.NaN;
+    private string? cachedPlanSourceKey;
     private int nextIndex;
     private bool armed;
     private bool running;
@@ -52,6 +55,48 @@ internal sealed class InternalMacroService
         audioClock = new AudioClock(log);
         hitInputEventInvoker = new HitInputEventInvoker(settings, log);
         directHitInvoker = new DirectHitInvoker(settings, log);
+    }
+
+    public void Warmup()
+    {
+        RuntimeWarmup.TrySetDotweenCapacity();
+        RebuildCachedPlan();
+        audioClock.TryStart(settings.ClockMode, out _, logReady: false);
+        object? controller = ReflectionCache.GetSingletonInstance("scrController");
+        if (controller != null)
+        {
+            ReflectionCache.ReadMember(controller, "currFloor", "currentFloor");
+            object? chosenPlanet = ReflectionCache.ReadMember(controller, "chosenPlanet", "selectedPlanet");
+            ReflectionCache.ReadMember(controller, "nextfloor", "nextFloor");
+            if (chosenPlanet != null)
+            {
+                object? planetCurrFloor = ReflectionCache.ReadMember(chosenPlanet, "currfloor", "currFloor", "currentFloor");
+                if (planetCurrFloor != null)
+                {
+                    ReflectionCache.ReadMember(planetCurrFloor, "nextfloor", "nextFloor", "next");
+                }
+            }
+        }
+
+        ReflectionCache.WarmupMembers(
+            "scrController",
+            "instance",
+            "Instance",
+            "inst",
+            "currFloor",
+            "currentFloor",
+            "chosenPlanet",
+            "selectedPlanet",
+            "nextfloor",
+            "nextFloor",
+            "floor",
+            "seqID",
+            "currentFloorSeqID");
+        ReflectionCache.WarmupMembers("scrLevelMaker", "instance", "Instance", "inst", "listFloors", "floors");
+        ReflectionCache.WarmupMembers("scrFloor", "seqID", "seqId", "floorSeqID", "nextfloor", "nextFloor", "next");
+        ReflectionCache.WarmupMembers("scrPlanet", "currfloor", "currFloor", "currentFloor", "targetExitAngle", "midspinInfiniteMargin", "responsive", "cachedAngle");
+        directHitInvoker.Warmup();
+        log($"Warmup Macro completed. planEntries={cachedPlan.Count}, fireMode={settings.FireMode}, clockMode={settings.ClockMode}");
     }
 
     public void Tick()
@@ -167,11 +212,10 @@ internal sealed class InternalMacroService
 
     private bool BuildPlanAndArm()
     {
-        MacroPlanBuildResult buildResult = planBuilder.Build(settings.MacroOffsetMs);
-        plan = buildResult.Plan;
+        plan = GetOrBuildCachedPlan();
         if (plan.Count == 0)
         {
-            LogStartFailure(buildResult.FailureReason ?? "Internal macro plan is empty.");
+            LogStartFailure("Internal macro plan is empty.");
             return false;
         }
 
@@ -182,6 +226,51 @@ internal sealed class InternalMacroService
         MacroPlanEntry firstEntry = plan[0];
         log($"Scheduler armed. entries={plan.Count}, firstSeqID={firstEntry.SeqId}, firstTargetTime={firstEntry.TargetTimeSeconds:F6}s, clockMode={settings.ClockMode}, fireMode={settings.FireMode}, dryRun={settings.DryRun}");
         return true;
+    }
+
+    private IReadOnlyList<MacroPlanEntry> GetOrBuildCachedPlan()
+    {
+        if (cachedPlan.Count > 0 &&
+            Math.Abs(cachedPlanOffsetMs - settings.MacroOffsetMs) < 0.000001 &&
+            string.Equals(cachedPlanSourceKey, ReadPlanSourceKey(), StringComparison.Ordinal))
+        {
+            return cachedPlan;
+        }
+
+        return RebuildCachedPlan();
+    }
+
+    private IReadOnlyList<MacroPlanEntry> RebuildCachedPlan()
+    {
+        MacroPlanBuildResult buildResult = planBuilder.Build(
+            settings.MacroOffsetMs,
+            logPreview: settings.LoggingMode == LoggingMode.Verbose);
+        cachedPlan = buildResult.Plan;
+        cachedPlanOffsetMs = settings.MacroOffsetMs;
+        cachedPlanSourceKey = ReadPlanSourceKey();
+        if (cachedPlan.Count == 0)
+        {
+            LogStartFailure(buildResult.FailureReason ?? "Internal macro plan is empty.");
+        }
+
+        return cachedPlan;
+    }
+
+    private static string ReadPlanSourceKey()
+    {
+        object? levelMaker = ReflectionCache.GetSingletonInstance("scrLevelMaker");
+        object? floors = levelMaker == null
+            ? null
+            : ReflectionCache.ReadMember(levelMaker, "listFloors", "floors");
+        if (floors == null)
+        {
+            return "no-levelmaker-floors";
+        }
+
+        int count = ReflectionCache.TryReadInt(floors, out int readCount, "Count", "count")
+            ? readCount
+            : -1;
+        return $"{floors.GetHashCode()}:{count}";
     }
 
     private bool TryStartArmedFromPlayerControlUpdate()
@@ -370,7 +459,7 @@ internal sealed class InternalMacroService
             return;
         }
 
-        log($"FireDueInputs nextIndex={nextIndex} nextSeqID={nextSeqId} nextTargetTime={nextTargetTime} clockTime={clockSeconds:F6}s dueCount={dueCount}");
+        LogVerbose($"FireDueInputs nextIndex={nextIndex} nextSeqID={nextSeqId} nextTargetTime={nextTargetTime} clockTime={clockSeconds:F6}s dueCount={dueCount}");
 
         while (nextIndex < plan.Count)
         {
@@ -390,7 +479,7 @@ internal sealed class InternalMacroService
 
             if (currentFloorSeqId > entry.SeqId)
             {
-                log($"floorGuard skipped: already passed target. currentFloor={currentFloorSeqId} targetSeqID={entry.SeqId}");
+                LogNormal($"floorGuard skipped: already passed target. currentFloor={currentFloorSeqId} targetSeqID={entry.SeqId}");
                 nextIndex++;
                 continue;
             }
@@ -431,11 +520,11 @@ internal sealed class InternalMacroService
                 break;
             }
 
-            log($"Fire attempt: seqID={entry.SeqId} targetTime={entry.TargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s diffMs={diffMs:F3} currentFloor={currentFloorSeqId} mode={settings.ClockMode} fireMode={settings.FireMode}");
+            LogVerbose($"Fire attempt: seqID={entry.SeqId} targetTime={entry.TargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s diffMs={diffMs:F3} currentFloor={currentFloorSeqId} mode={settings.ClockMode} fireMode={settings.FireMode}");
 
             if (settings.DryRun)
             {
-                log($"DryRun targetTime={entry.TargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s diffMs={diffMs:F3} seqID={entry.SeqId} currFloorSeqID={currentFloorSeqId} clockMode={settings.ClockMode}");
+                LogNormal($"DryRun targetTime={entry.TargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s diffMs={diffMs:F3} seqID={entry.SeqId} currFloorSeqID={currentFloorSeqId} clockMode={settings.ClockMode}");
                 nextIndex++;
                 continue;
             }
@@ -456,7 +545,7 @@ internal sealed class InternalMacroService
                     continue;
                 }
 
-                log($"Hit failed; keeping nextIndex={nextIndex} seqID={entry.SeqId}");
+                LogNormal($"Hit failed; keeping nextIndex={nextIndex} seqID={entry.SeqId}");
                 if (HandleHitFailedTooLate(entry, clockSeconds, diffMs, "HitInputEvent did not advance floor"))
                 {
                     if (!running)
@@ -487,7 +576,7 @@ internal sealed class InternalMacroService
                     continue;
                 }
 
-                log($"Hit failed; keeping nextIndex={nextIndex} seqID={entry.SeqId}");
+                LogNormal($"Hit failed; keeping nextIndex={nextIndex} seqID={entry.SeqId}");
                 if (HandleHitFailedTooLate(entry, clockSeconds, diffMs, "DirectHit did not advance floor"))
                 {
                     if (!running)
@@ -508,7 +597,7 @@ internal sealed class InternalMacroService
 
             int virtualInputCount = Math.Max(1, settings.VirtualInputKeyCount);
             InputPatchState.BeginFrame(virtualInputCount);
-            log($"InputPatch mode does not confirm floor advancement. scheduled count=1 virtualKey={settings.VirtualInputKey} virtualKeyCount={virtualInputCount} clockTime={clockSeconds:F6}s currFloorSeqID={currentFloorSeqId} seqID={entry.SeqId}");
+            LogNormal($"InputPatch mode does not confirm floor advancement. scheduled count=1 virtualKey={settings.VirtualInputKey} virtualKeyCount={virtualInputCount} clockTime={clockSeconds:F6}s currFloorSeqID={currentFloorSeqId} seqID={entry.SeqId}");
             nextIndex++;
         }
     }
@@ -528,7 +617,7 @@ internal sealed class InternalMacroService
 
     private void LogHitResult(int currentFloorSeqId, HitInvokeResult result)
     {
-        log($"Hit result currentFloor={currentFloorSeqId} targetSeqID={result.TargetSeqId} accepted={result.Accepted} immediateAdvanced={result.ImmediateAdvanced} atOrPastTarget={result.AtOrPastTarget} shouldConsume={result.ShouldConsume} beforeFloor={result.BeforeFloorSeqId} afterFloor={result.AfterFloorSeqId}");
+        LogVerbose($"Hit result currentFloor={currentFloorSeqId} targetSeqID={result.TargetSeqId} accepted={result.Accepted} immediateAdvanced={result.ImmediateAdvanced} atOrPastTarget={result.AtOrPastTarget} shouldConsume={result.ShouldConsume} beforeFloor={result.BeforeFloorSeqId} afterFloor={result.AfterFloorSeqId}");
     }
 
     private void RecordHitDiff(double diffMs)
@@ -578,7 +667,7 @@ internal sealed class InternalMacroService
         }
 
         lastClockResetWaitLogTime = Time.unscaledTime;
-        log($"waiting for clock reset: currentFloor={currentFloor} firstTargetTime={firstTargetTime:F6}s clockTime={clockSeconds:F6}s");
+        LogNormal($"waiting for clock reset: currentFloor={currentFloor} firstTargetTime={firstTargetTime:F6}s clockTime={clockSeconds:F6}s");
     }
 
     private void LogPlayerControlUpdateTick()
@@ -589,7 +678,7 @@ internal sealed class InternalMacroService
         }
 
         lastPlayerControlTickLogTime = Time.unscaledTime;
-        log($"PlayerControl_Update tick received. armed={armed} running={running}");
+        LogVerbose($"PlayerControl_Update tick received. armed={armed} running={running}");
     }
 
     private void LogFireSkip(string reason)
@@ -600,7 +689,7 @@ internal sealed class InternalMacroService
         }
 
         lastFireSkipLogTime = Time.unscaledTime;
-        log($"FireDueInputs skipped: {reason}");
+        LogVerbose($"FireDueInputs skipped: {reason}");
     }
 
     private void LogClockLost()
@@ -611,7 +700,7 @@ internal sealed class InternalMacroService
         }
 
         lastClockLostLogTime = Time.unscaledTime;
-        log($"clock lost: mode={settings.ClockMode}");
+        LogNormal($"clock lost: mode={settings.ClockMode}");
     }
 
     private void LogCurrentFloorLost()
@@ -622,7 +711,23 @@ internal sealed class InternalMacroService
         }
 
         lastCurrentFloorLostLogTime = Time.unscaledTime;
-        log("Current currFloor.seqID was not available. Keeping internal macro scheduler running.");
+        LogNormal("Current currFloor.seqID was not available. Keeping internal macro scheduler running.");
+    }
+
+    private void LogNormal(string message)
+    {
+        if (settings.LoggingMode >= LoggingMode.Normal)
+        {
+            log(message);
+        }
+    }
+
+    private void LogVerbose(string message)
+    {
+        if (settings.LoggingMode == LoggingMode.Verbose)
+        {
+            log(message);
+        }
     }
 
     private static bool TryReadCurrentFloorSeqId(out int seqId)

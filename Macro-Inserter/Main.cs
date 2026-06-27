@@ -22,6 +22,7 @@ public static class Main
     public static bool Load(UnityModManager.ModEntry entry)
     {
         modEntry = entry;
+        RuntimeWarmup.TrySetDotweenCapacity();
         settings = UnityModManager.ModSettings.Load<InternalMacroSettings>(entry);
         macroOffsetText = settings.MacroOffsetMs.ToString(CultureInfo.InvariantCulture);
         maxLateRetryMsText = settings.MaxLateRetryMs.ToString(CultureInfo.InvariantCulture);
@@ -115,6 +116,11 @@ public static class Main
         GUILayout.Label("DirectHit is the normal internal path. HitInputEvent is debug/experimental; InputPatch is experimental and not recommended.");
 
         GUILayout.BeginHorizontal();
+        GUILayout.Label("LoggingMode", GUILayout.Width(140f));
+        settings.LoggingMode = (LoggingMode)GUILayout.Toolbar((int)settings.LoggingMode, new[] { "Minimal", "Normal", "Verbose" }, GUILayout.Width(360f));
+        GUILayout.EndHorizontal();
+
+        GUILayout.BeginHorizontal();
         GUILayout.Label("FirstHitMode", GUILayout.Width(140f));
         settings.FirstHitMode = (FirstHitMode)GUILayout.Toolbar((int)settings.FirstHitMode, new[] { "Manual", "InputPatch", "HitInputEvent" }, GUILayout.Width(360f));
         GUILayout.EndHorizontal();
@@ -143,6 +149,7 @@ public static class Main
             GUILayout.Label($"Hit diff avg={service.AverageHitDiffMs:F3}ms maxAbs={service.MaxAbsHitDiffMs:F3}ms samples={service.HitDiffSampleCount}");
         }
 
+        settings.ValidateAfterHit = GUILayout.Toggle(settings.ValidateAfterHit, "ValidateAfterHit");
         settings.DirectHitIgnoreInput = GUILayout.Toggle(settings.DirectHitIgnoreInput, "DirectHitIgnoreInput");
 
         GUILayout.BeginHorizontal();
@@ -162,6 +169,11 @@ public static class Main
         if (GUILayout.Button("Stop scheduler", GUILayout.Width(160f)))
         {
             service?.Stop("manual stop button");
+        }
+
+        if (GUILayout.Button("Warmup Macro", GUILayout.Width(160f)))
+        {
+            service?.Warmup();
         }
 
         GUILayout.EndVertical();

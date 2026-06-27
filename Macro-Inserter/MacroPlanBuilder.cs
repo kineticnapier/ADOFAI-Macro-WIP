@@ -14,7 +14,7 @@ internal sealed class MacroPlanBuilder
         this.log = log;
     }
 
-    public MacroPlanBuildResult Build(double macroOffsetMs)
+    public MacroPlanBuildResult Build(double macroOffsetMs, bool logPreview = true)
     {
         string? floorSourceFailure = null;
         IReadOnlyList<object> floors = GetFloorsFromLevelMaker(out floorSourceFailure);
@@ -52,9 +52,12 @@ internal sealed class MacroPlanBuilder
                 "Macro plan is empty after filtering seqID <= 0 and targetTime <= 0.");
         }
 
-        foreach (MacroPlanEntry entry in plan.Take(5))
+        if (logPreview)
         {
-            log($"MacroPlan preview seqID={entry.SeqId} targetTime={entry.TargetTimeSeconds:F6}s");
+            foreach (MacroPlanEntry entry in plan.Take(5))
+            {
+                log($"MacroPlan preview seqID={entry.SeqId} targetTime={entry.TargetTimeSeconds:F6}s");
+            }
         }
 
         return new MacroPlanBuildResult(plan, failureReason: null);

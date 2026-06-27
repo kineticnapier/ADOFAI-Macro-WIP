@@ -15,19 +15,26 @@ internal sealed class DirectHitInvoker
         this.log = log;
     }
 
+    public void Warmup()
+    {
+        ReflectionCache.GetSingletonInstance("scrController");
+        hitMethod ??= ReflectionCache.FindMethod("scrController", "Hit", typeof(bool));
+        ReflectionCache.WarmupMembers("scrController", "currFloor", "currentFloor", "floor", "seqID", "currentFloorSeqID");
+    }
+
     public HitInvokeResult Invoke(int seqId, double audioTime, int beforeFloorSeqId)
     {
         object? controller = ReflectionCache.GetSingletonInstance("scrController");
         if (controller == null)
         {
-            log("scrController.instance was not found for DirectHit.");
+            LogNormal("scrController.instance was not found for DirectHit.");
             return CreateResult(false, beforeFloorSeqId, -1, seqId);
         }
 
         hitMethod ??= ReflectionCache.FindMethod("scrController", "Hit", typeof(bool));
         if (hitMethod == null)
         {
-            log("scrController.Hit(bool) was not found.");
+            LogNormal("scrController.Hit(bool) was not found.");
             return CreateResult(false, beforeFloorSeqId, -1, seqId);
         }
 
@@ -39,30 +46,42 @@ internal sealed class DirectHitInvoker
         catch (Exception ex)
         {
             LogInvalidFloorIfNeeded(seqId, audioTime);
-            log($"DirectHit threw {ex.GetType().Name}. seqID={seqId} audioTime={audioTime:F6}s.");
-            return CreateResult(false, beforeFloorSeqId, ReadCurrentFloorSeqId(), seqId);
+            LogNormal($"DirectHit threw {ex.GetType().Name}. seqID={seqId} audioTime={audioTime:F6}s.");
+            return CreateResult(false, beforeFloorSeqId, ReadCurrentFloorSeqIdIfNeeded(), seqId);
         }
 
         if (result is bool accepted)
         {
-            log($"DirectHit result={accepted} ignoreInput={settings.DirectHitIgnoreInput} seqID={seqId} audioTime={audioTime:F6}s");
+            LogVerbose($"DirectHit result={accepted} ignoreInput={settings.DirectHitIgnoreInput} seqID={seqId} audioTime={audioTime:F6}s");
             if (!accepted)
             {
                 LogInvalidFloorIfNeeded(seqId, audioTime);
-                log($"DirectHit failed. seqID={seqId} audioTime={audioTime:F6}s.");
+                LogNormal($"DirectHit failed. seqID={seqId} audioTime={audioTime:F6}s.");
             }
 
-            return CreateResult(accepted, beforeFloorSeqId, ReadCurrentFloorSeqId(), seqId);
+            if (!settings.ValidateAfterHit)
+            {
+                return new HitInvokeResult(
+                    accepted,
+                    false,
+                    accepted,
+                    accepted,
+                    beforeFloorSeqId,
+                    -1,
+                    seqId);
+            }
+
+            return CreateResult(accepted, beforeFloorSeqId, ReadCurrentFloorSeqIdIfNeeded(), seqId);
         }
 
-        return CreateResult(false, beforeFloorSeqId, ReadCurrentFloorSeqId(), seqId);
+        return CreateResult(false, beforeFloorSeqId, ReadCurrentFloorSeqIdIfNeeded(), seqId);
     }
 
     private void LogInvalidFloorIfNeeded(int seqId, double audioTime)
     {
         if (seqId == 0)
         {
-            log($"DirectHit failed because invalid floor 0 was scheduled. audioTime={audioTime:F6}s.");
+            LogNormal($"DirectHit failed because invalid floor 0 was scheduled. audioTime={audioTime:F6}s.");
         }
     }
 
@@ -79,6 +98,11 @@ internal sealed class DirectHitInvoker
             beforeFloorSeqId,
             afterFloorSeqId,
             targetSeqId);
+    }
+
+    private int ReadCurrentFloorSeqIdIfNeeded()
+    {
+        return settings.ValidateAfterHit ? ReadCurrentFloorSeqId() : -1;
     }
 
     private static int ReadCurrentFloorSeqId()
@@ -105,5 +129,21 @@ internal sealed class DirectHitInvoker
         return ReflectionCache.TryReadInt(currFloor, out int seqId, "seqID", "seqId", "floorSeqID")
             ? seqId
             : -1;
+    }
+
+    private void LogNormal(string message)
+    {
+        if (settings.LoggingMode >= LoggingMode.Normal)
+        {
+            log(message);
+        }
+    }
+
+    private void LogVerbose(string message)
+    {
+        if (settings.LoggingMode == LoggingMode.Verbose)
+        {
+            log(message);
+        }
     }
 }
