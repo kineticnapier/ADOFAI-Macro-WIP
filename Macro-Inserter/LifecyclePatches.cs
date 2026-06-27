@@ -12,10 +12,8 @@ internal static class LifecyclePatches
     {
         "Fail2Action",
         "Won_Update",
-        "Restart",
         "QuitToMainMenu",
         "SwitchToEditMode",
-        "WipeToBlack",
         "OnLandOnPortal"
     };
 
@@ -89,8 +87,8 @@ internal static class LifecyclePatches
         getService?.Invoke()?.StartFromRewind();
     }
 
-    private static void StopSchedulerPrefix()
+    private static void StopSchedulerPrefix(MethodBase __originalMethod)
     {
-        getService?.Invoke()?.Stop();
+        getService?.Invoke()?.Stop($"stop patch: {__originalMethod.Name}");
     }
 }

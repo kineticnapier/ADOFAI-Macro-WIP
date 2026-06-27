@@ -44,7 +44,7 @@ public static class Main
         enabled = value;
         if (!enabled)
         {
-            service?.Stop();
+            service?.Stop("settings disabled");
         }
 
         return true;
@@ -130,7 +130,7 @@ public static class Main
 
         if (GUILayout.Button("Stop scheduler", GUILayout.Width(160f)))
         {
-            service?.Stop();
+            service?.Stop("manual stop button");
         }
 
         GUILayout.EndVertical();

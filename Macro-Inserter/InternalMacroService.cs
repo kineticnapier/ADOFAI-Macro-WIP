@@ -8,6 +8,8 @@ namespace Macro_Inserter;
 internal sealed class InternalMacroService
 {
     private const float StartFailureLogIntervalSeconds = 1.0f;
+    private const float ClockLostLogIntervalSeconds = 1.0f;
+    private const float CurrentFloorLostLogIntervalSeconds = 1.0f;
 
     private readonly InternalMacroSettings settings;
     private readonly Action<string> log;
@@ -23,6 +25,8 @@ internal sealed class InternalMacroService
     private ClockMode runningClockMode;
     private float lastStartFailureLogTime = -10.0f;
     private string? lastStartFailureReason;
+    private float lastClockLostLogTime = -10.0f;
+    private float lastCurrentFloorLostLogTime = -10.0f;
 
     public InternalMacroService(InternalMacroSettings settings, Action<string> log)
     {
@@ -45,44 +49,39 @@ internal sealed class InternalMacroService
         {
             return;
         }
-
-        FireDueInputsFromModUpdate();
     }
 
-    public void TickForInputUpdate()
+    public void TickForPlayerControlUpdate()
     {
-        if (settings.FireMode != FireMode.InputPatch)
-        {
-            return;
-        }
-
         if (!EnsureRunningForCurrentSettings())
         {
             return;
         }
 
-        FireDueInputsForInputPatch();
+        FireDueInputsFromPlayerControlUpdate();
     }
 
     public void StartFromRewind()
     {
-        Stop();
-
         if (!settings.EnableInternalMacro)
         {
+            Stop("settings disabled");
             return;
         }
 
         if (!RuntimeSafety.IsAllowedPlaybackState())
         {
+            Stop("playback state not allowed");
             return;
         }
 
         if (RuntimeSafety.IsPaused() || RuntimeSafety.IsUiBlockingStart())
         {
+            Stop("playback state not allowed");
             return;
         }
 
+        Stop("start rewind");
         TryStart();
     }
 
@@ -90,18 +89,7 @@ internal sealed class InternalMacroService
     {
         if (!settings.EnableInternalMacro)
         {
-            Stop();
-            return false;
-        }
-
-        if (!RuntimeSafety.IsAllowedPlaybackState())
-        {
-            Stop();
-            return false;
-        }
-
-        if (RuntimeSafety.IsPaused())
-        {
+            Stop("settings disabled");
             return false;
         }
 
@@ -113,21 +101,21 @@ internal sealed class InternalMacroService
         if (runningFireMode != settings.FireMode)
         {
             log("FireMode changed. Stopping internal macro scheduler; it will start again after Start_Rewind.");
-            Stop();
+            Stop("settings changed: FireMode");
             return false;
         }
 
         if (runningClockMode != settings.ClockMode)
         {
             log("ClockMode changed. Stopping internal macro scheduler; it will start again after Start_Rewind.");
-            Stop();
+            Stop("settings changed: ClockMode");
             return false;
         }
 
         return true;
     }
 
-    public void Stop()
+    public void Stop(string reason)
     {
         if (!running)
         {
@@ -138,7 +126,7 @@ internal sealed class InternalMacroService
         plan = Array.Empty<MacroPlanEntry>();
         nextIndex = 0;
         InputPatchState.Reset();
-        log("Internal macro scheduler stopped.");
+        log($"Internal macro scheduler stopped. reason={reason}");
     }
 
     private bool TryStart()
@@ -221,42 +209,39 @@ internal sealed class InternalMacroService
         return index;
     }
 
-    private void FireDueInputsFromModUpdate()
+    private void FireDueInputsFromPlayerControlUpdate()
     {
-        FireDueInputs(allowDirectHit: true, allowInputPatch: false);
-    }
-
-    private void FireDueInputsForInputPatch()
-    {
-        FireDueInputs(allowDirectHit: false, allowInputPatch: true);
+        FireDueInputs(allowDirectHit: true, allowInputPatch: true);
     }
 
     private void FireDueInputs(bool allowDirectHit, bool allowInputPatch)
     {
         if (!audioClock.TryGetSeconds(settings.ClockMode, out double clockSeconds))
         {
-            log($"waiting for clock: mode={settings.ClockMode}");
-            Stop();
+            LogClockLost();
             return;
         }
 
+        string nextSeqId = nextIndex < plan.Count ? plan[nextIndex].SeqId.ToString() : "<end>";
+        string nextTargetTime = nextIndex < plan.Count ? $"{plan[nextIndex].TargetTimeSeconds:F6}s" : "<end>";
+        int dueCount = CountDueEntries(clockSeconds);
+        log($"FireDueInputs nextIndex={nextIndex} nextSeqID={nextSeqId} nextTargetTime={nextTargetTime} clockTime={clockSeconds:F6}s dueCount={dueCount}");
+
         if (nextIndex >= plan.Count)
         {
-            Stop();
+            Stop("end of plan");
             return;
         }
 
         if (!TryReadCurrentFloorSeqId(out int currentFloorSeqId))
         {
-            log("Current currFloor.seqID was not available. Stopping internal macro scheduler.");
-            Stop();
+            LogCurrentFloorLost();
             return;
         }
 
         List<MacroPlanEntry> due = new();
         while (nextIndex < plan.Count &&
-               plan[nextIndex].TargetTimeSeconds <= clockSeconds &&
-               plan[nextIndex].SeqId <= currentFloorSeqId)
+               plan[nextIndex].TargetTimeSeconds <= clockSeconds)
         {
             due.Add(plan[nextIndex]);
             nextIndex++;
@@ -323,6 +308,41 @@ internal sealed class InternalMacroService
             string seqIds = string.Join(",", due.Select(entry => entry.SeqId.ToString()).ToArray());
             log($"InputPatch scheduled count={due.Count} virtualKey={settings.VirtualInputKey} virtualKeyCount={virtualInputCount} clockTime={clockSeconds:F6}s currFloorSeqID={currentFloorSeqId} seqID={seqIds}");
         }
+    }
+
+    private int CountDueEntries(double clockSeconds)
+    {
+        int count = 0;
+        int index = nextIndex;
+        while (index < plan.Count && plan[index].TargetTimeSeconds <= clockSeconds)
+        {
+            count++;
+            index++;
+        }
+
+        return count;
+    }
+
+    private void LogClockLost()
+    {
+        if (Time.unscaledTime - lastClockLostLogTime < ClockLostLogIntervalSeconds)
+        {
+            return;
+        }
+
+        lastClockLostLogTime = Time.unscaledTime;
+        log($"clock lost: mode={settings.ClockMode}");
+    }
+
+    private void LogCurrentFloorLost()
+    {
+        if (Time.unscaledTime - lastCurrentFloorLostLogTime < CurrentFloorLostLogIntervalSeconds)
+        {
+            return;
+        }
+
+        lastCurrentFloorLostLogTime = Time.unscaledTime;
+        log("Current currFloor.seqID was not available. Keeping internal macro scheduler running.");
     }
 
     private static bool TryReadCurrentFloorSeqId(out int seqId)

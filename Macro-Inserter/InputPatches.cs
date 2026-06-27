@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Reflection;
 using HarmonyLib;
 
@@ -14,7 +15,7 @@ internal static class InputPatches
 
         PatchPostfix(harmony, log, "ValidInputWasTriggered", nameof(ValidInputWasTriggeredPostfix));
         PatchPrefix(harmony, log, "CountValidKeysPressed", nameof(CountValidKeysPressedPrefix));
-        PatchUpdateInput(harmony, log);
+        PatchPlayerControlUpdate(harmony, log);
     }
 
     private static void PatchPostfix(Harmony harmony, Action<string> log, string gameMethodName, string patchMethodName)
@@ -45,22 +46,26 @@ internal static class InputPatches
         log($"Patch applied: scrController.{gameMethodName}");
     }
 
-    private static void PatchUpdateInput(Harmony harmony, Action<string> log)
+    private static void PatchPlayerControlUpdate(Harmony harmony, Action<string> log)
     {
-        MethodInfo? target = ReflectionCache.FindMethod("scrController", "UpdateInput");
-        MethodInfo? prefix = typeof(InputPatches).GetMethod(nameof(UpdateInputPrefix), BindingFlags.Static | BindingFlags.NonPublic);
-        MethodInfo? postfix = typeof(InputPatches).GetMethod(nameof(UpdateInputPostfix), BindingFlags.Static | BindingFlags.NonPublic);
-        if (target == null || prefix == null || postfix == null)
+        MethodInfo? prefix = typeof(InputPatches).GetMethod(nameof(PlayerControlUpdatePrefix), BindingFlags.Static | BindingFlags.NonPublic);
+        MethodInfo? postfix = typeof(InputPatches).GetMethod(nameof(PlayerControlUpdatePostfix), BindingFlags.Static | BindingFlags.NonPublic);
+        IReadOnlyList<MethodInfo> targets = ReflectionCache.FindMethods("scrController", "PlayerControl_Update");
+        if (targets.Count == 0 || prefix == null || postfix == null)
         {
-            log("Patch skipped: scrController.UpdateInput was not found.");
+            log("Patch skipped: scrController.PlayerControl_Update was not found.");
             return;
         }
 
-        harmony.Patch(
-            target,
-            prefix: new HarmonyMethod(prefix),
-            postfix: new HarmonyMethod(postfix));
-        log("Patch applied: scrController.UpdateInput");
+        foreach (MethodInfo target in targets)
+        {
+            harmony.Patch(
+                target,
+                prefix: new HarmonyMethod(prefix),
+                postfix: new HarmonyMethod(postfix));
+        }
+
+        log($"Patch applied: scrController.PlayerControl_Update ({targets.Count} overloads)");
     }
 
     private static void ValidInputWasTriggeredPostfix(ref bool __result)
@@ -82,12 +87,12 @@ internal static class InputPatches
         return false;
     }
 
-    private static void UpdateInputPrefix()
+    private static void PlayerControlUpdatePrefix()
     {
-        getService?.Invoke()?.TickForInputUpdate();
+        getService?.Invoke()?.TickForPlayerControlUpdate();
     }
 
-    private static void UpdateInputPostfix()
+    private static void PlayerControlUpdatePostfix()
     {
         InputPatchState.ClearFrame();
     }
