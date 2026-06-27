@@ -35,6 +35,7 @@ internal sealed class InternalMacroService
     private float lastClockResetWaitLogTime = -10.0f;
     private float lastPlayerControlTickLogTime = -10.0f;
     private float lastFireSkipLogTime = -10.0f;
+    private bool firstInputPatchScheduled;
 
     public InternalMacroService(InternalMacroSettings settings, Action<string> log)
     {
@@ -146,6 +147,7 @@ internal sealed class InternalMacroService
         running = false;
         plan = Array.Empty<MacroPlanEntry>();
         nextIndex = 0;
+        firstInputPatchScheduled = false;
         InputPatchState.Reset();
 
         if (!wasRunning)
@@ -167,6 +169,7 @@ internal sealed class InternalMacroService
         }
 
         armed = true;
+        firstInputPatchScheduled = false;
         nextIndex = 0;
         MacroPlanEntry firstEntry = plan[0];
         log($"Scheduler armed. entries={plan.Count}, firstSeqID={firstEntry.SeqId}, firstTargetTime={firstEntry.TargetTimeSeconds:F6}s, clockMode={settings.ClockMode}, fireMode={settings.FireMode}, dryRun={settings.DryRun}");
@@ -196,6 +199,24 @@ internal sealed class InternalMacroService
         if (hasCurrentFloor && IsStaleClockAtBeginning(clockSeconds, currentFloor, firstPlanEntry.TargetTimeSeconds))
         {
             LogWaitingForClockReset(clockSeconds, currentFloor, firstPlanEntry.TargetTimeSeconds);
+            return false;
+        }
+
+        if (ShouldWaitForManualFirstHit(hasCurrentFloor, currentFloor))
+        {
+            LogFireSkip($"manual first hit waiting: currentFloor={currentFloor} targetSeqID={firstPlanEntry.SeqId} clockTime={clockSeconds:F6}s");
+            return false;
+        }
+
+        if (ShouldUseInputPatchFirstHit(hasCurrentFloor, currentFloor))
+        {
+            ScheduleFirstInputPatch(clockSeconds, currentFloor, firstPlanEntry);
+            return false;
+        }
+
+        if (ShouldWaitForInputPatchFirstHit(hasCurrentFloor, currentFloor))
+        {
+            LogFireSkip($"InputPatch first hit waiting: currentFloor={currentFloor} targetSeqID={firstPlanEntry.SeqId} clockTime={clockSeconds:F6}s");
             return false;
         }
 
@@ -233,13 +254,13 @@ internal sealed class InternalMacroService
 
     private int ResolveStartIndex(double audioSeconds, bool hasCurrentFloor, int currentFloor)
     {
-        if (!hasCurrentFloor)
+        if (!settings.StartFromCurrentFloor || !hasCurrentFloor)
         {
             return FindFirstAtOrAfterAudioTime(audioSeconds);
         }
 
         int byFloor = 0;
-        while (byFloor < plan.Count && plan[byFloor].SeqId < currentFloor)
+        while (byFloor < plan.Count && plan[byFloor].SeqId <= currentFloor)
         {
             byFloor++;
         }
@@ -259,6 +280,43 @@ internal sealed class InternalMacroService
         }
 
         return index;
+    }
+
+    private bool ShouldWaitForManualFirstHit(bool hasCurrentFloor, int currentFloor)
+    {
+        return settings.FirstHitMode == FirstHitMode.Manual &&
+               hasCurrentFloor &&
+               currentFloor < 1 &&
+               plan.Count > 0 &&
+               plan[0].SeqId == 1;
+    }
+
+    private bool ShouldUseInputPatchFirstHit(bool hasCurrentFloor, int currentFloor)
+    {
+        return settings.FirstHitMode == FirstHitMode.InputPatch &&
+               hasCurrentFloor &&
+               currentFloor < 1 &&
+               plan.Count > 0 &&
+               plan[0].SeqId == 1 &&
+               !firstInputPatchScheduled;
+    }
+
+    private bool ShouldWaitForInputPatchFirstHit(bool hasCurrentFloor, int currentFloor)
+    {
+        return settings.FirstHitMode == FirstHitMode.InputPatch &&
+               hasCurrentFloor &&
+               currentFloor < 1 &&
+               plan.Count > 0 &&
+               plan[0].SeqId == 1 &&
+               firstInputPatchScheduled;
+    }
+
+    private void ScheduleFirstInputPatch(double clockSeconds, int currentFloor, MacroPlanEntry firstEntry)
+    {
+        int virtualInputCount = Math.Max(1, settings.VirtualInputKeyCount);
+        InputPatchState.BeginFrame(virtualInputCount);
+        firstInputPatchScheduled = true;
+        log($"FirstHitMode InputPatch scheduled. currentFloor={currentFloor} targetSeqID={firstEntry.SeqId} targetTime={firstEntry.TargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s virtualKey={settings.VirtualInputKey} virtualKeyCount={virtualInputCount}");
     }
 
     private void FireDueInputsFromPlayerControlUpdate()
@@ -306,82 +364,148 @@ internal sealed class InternalMacroService
 
         log($"FireDueInputs nextIndex={nextIndex} nextSeqID={nextSeqId} nextTargetTime={nextTargetTime} clockTime={clockSeconds:F6}s dueCount={dueCount}");
 
-        List<MacroPlanEntry> due = new();
-        while (nextIndex < plan.Count &&
-               plan[nextIndex].TargetTimeSeconds <= clockSeconds)
+        while (nextIndex < plan.Count)
         {
             MacroPlanEntry entry = plan[nextIndex];
+            if (entry.TargetTimeSeconds > clockSeconds)
+            {
+                break;
+            }
+
+            if (!TryReadCurrentFloorSeqId(out currentFloorSeqId))
+            {
+                LogCurrentFloorLost();
+                break;
+            }
+
+            double diffMs = (clockSeconds - entry.TargetTimeSeconds) * 1000.0;
+
             if (currentFloorSeqId > entry.SeqId)
             {
-                log($"floorGuard skipped: currentFloor={currentFloorSeqId} targetSeqID={entry.SeqId}");
+                log($"floorGuard skipped: already passed target. currentFloor={currentFloorSeqId} targetSeqID={entry.SeqId}");
                 nextIndex++;
                 continue;
             }
 
-            due.Add(entry);
-            nextIndex++;
-        }
+            if (currentFloorSeqId < entry.SeqId - 1)
+            {
+                LogFireSkip($"floor not ready: currentFloor={currentFloorSeqId} targetSeqID={entry.SeqId} clockTime={clockSeconds:F6}s");
+                if (HandleHitFailedTooLate(entry, clockSeconds, diffMs, "floor not ready"))
+                {
+                    if (!running)
+                    {
+                        return;
+                    }
 
-        if (due.Count == 0)
-        {
-            return;
-        }
+                    continue;
+                }
 
-        foreach (MacroPlanEntry entry in due)
-        {
-            double diffMs = (clockSeconds - entry.TargetTimeSeconds) * 1000.0;
-            log($"Fire attempt: seqID={entry.SeqId} targetTime={entry.TargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s diffMs={diffMs:F3} currFloor={currentFloorSeqId} mode={settings.ClockMode} fireMode={settings.FireMode}");
+                break;
+            }
+
+            if (currentFloorSeqId == 0 && entry.SeqId == 1 && settings.FirstHitMode == FirstHitMode.Manual)
+            {
+                LogFireSkip($"manual first hit waiting: currentFloor={currentFloorSeqId} targetSeqID={entry.SeqId} clockTime={clockSeconds:F6}s");
+                break;
+            }
+
+            if (currentFloorSeqId == 0 && entry.SeqId == 1 && settings.FirstHitMode == FirstHitMode.InputPatch)
+            {
+                if (!firstInputPatchScheduled)
+                {
+                    ScheduleFirstInputPatch(clockSeconds, currentFloorSeqId, entry);
+                }
+                else
+                {
+                    LogFireSkip($"InputPatch first hit waiting: currentFloor={currentFloorSeqId} targetSeqID={entry.SeqId} clockTime={clockSeconds:F6}s");
+                }
+
+                break;
+            }
+
+            log($"Fire attempt: seqID={entry.SeqId} targetTime={entry.TargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s diffMs={diffMs:F3} currentFloor={currentFloorSeqId} mode={settings.ClockMode} fireMode={settings.FireMode}");
+
             if (settings.DryRun)
             {
                 log($"DryRun targetTime={entry.TargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s diffMs={diffMs:F3} seqID={entry.SeqId} currFloorSeqID={currentFloorSeqId} clockMode={settings.ClockMode}");
-            }
-        }
-
-        if (settings.DryRun)
-        {
-            return;
-        }
-
-        if (settings.FireMode == FireMode.HitInputEvent)
-        {
-            if (!allowDirectHit)
-            {
-                return;
+                nextIndex++;
+                continue;
             }
 
-            foreach (MacroPlanEntry entry in due)
+            if (settings.FireMode == FireMode.HitInputEvent)
             {
-                bool accepted = hitInputEventInvoker.Invoke(entry.SeqId, clockSeconds);
-                log($"HitInputEvent result={accepted} seqID={entry.SeqId} clockTime={clockSeconds:F6}s");
-                if (!accepted)
+                if (!allowDirectHit)
                 {
-                    log("HitInputEvent returned false");
+                    return;
                 }
-            }
-        }
-        else if (settings.FireMode == FireMode.DirectHit)
-        {
-            if (!allowDirectHit)
-            {
-                return;
+
+                HitInvokeResult result = hitInputEventInvoker.Invoke(entry.SeqId, clockSeconds);
+                LogHitResult(currentFloorSeqId, result);
+                if (result.ShouldConsume)
+                {
+                    nextIndex++;
+                    continue;
+                }
+
+                log($"Hit failed; keeping nextIndex={nextIndex} seqID={entry.SeqId}");
+                if (HandleHitFailedTooLate(entry, clockSeconds, diffMs, "HitInputEvent did not advance floor"))
+                {
+                    if (!running)
+                    {
+                        return;
+                    }
+
+                    continue;
+                }
+
+                break;
             }
 
-            foreach (MacroPlanEntry entry in due)
+            if (settings.FireMode == FireMode.DirectHit)
             {
-                directHitInvoker.Invoke(entry.SeqId, clockSeconds);
+                if (!allowDirectHit)
+                {
+                    return;
+                }
+
+                int beforeFloorSeqId = currentFloorSeqId;
+                bool accepted = directHitInvoker.Invoke(entry.SeqId, clockSeconds);
+                int afterFloorSeqId = TryReadCurrentFloorSeqId(out int afterDirectHitFloorSeqId)
+                    ? afterDirectHitFloorSeqId
+                    : -1;
+                bool immediateAdvanced = afterFloorSeqId > beforeFloorSeqId;
+                bool atOrPastTarget = afterFloorSeqId >= entry.SeqId;
+                bool shouldConsume = accepted && atOrPastTarget;
+                log($"Hit result currentFloor={currentFloorSeqId} targetSeqID={entry.SeqId} accepted={accepted} immediateAdvanced={immediateAdvanced} atOrPastTarget={atOrPastTarget} shouldConsume={shouldConsume} beforeFloor={beforeFloorSeqId} afterFloor={afterFloorSeqId}");
+                if (shouldConsume)
+                {
+                    nextIndex++;
+                    continue;
+                }
+
+                log($"Hit failed; keeping nextIndex={nextIndex} seqID={entry.SeqId}");
+                if (HandleHitFailedTooLate(entry, clockSeconds, diffMs, "DirectHit did not advance floor"))
+                {
+                    if (!running)
+                    {
+                        return;
+                    }
+
+                    continue;
+                }
+
+                break;
             }
-        }
-        else
-        {
+
             if (!allowInputPatch)
             {
                 return;
             }
 
             int virtualInputCount = Math.Max(1, settings.VirtualInputKeyCount);
-            InputPatchState.BeginFrame(due.Count * virtualInputCount);
-            string seqIds = string.Join(",", due.Select(entry => entry.SeqId.ToString()).ToArray());
-            log($"InputPatch scheduled count={due.Count} virtualKey={settings.VirtualInputKey} virtualKeyCount={virtualInputCount} clockTime={clockSeconds:F6}s currFloorSeqID={currentFloorSeqId} seqID={seqIds}");
+            InputPatchState.BeginFrame(virtualInputCount);
+            log($"InputPatch mode does not confirm floor advancement. scheduled count=1 virtualKey={settings.VirtualInputKey} virtualKeyCount={virtualInputCount} clockTime={clockSeconds:F6}s currFloorSeqID={currentFloorSeqId} seqID={entry.SeqId}");
+            nextIndex++;
         }
     }
 
@@ -396,6 +520,30 @@ internal sealed class InternalMacroService
         }
 
         return count;
+    }
+
+    private void LogHitResult(int currentFloorSeqId, HitInvokeResult result)
+    {
+        log($"Hit result currentFloor={currentFloorSeqId} targetSeqID={result.TargetSeqId} accepted={result.Accepted} immediateAdvanced={result.ImmediateAdvanced} atOrPastTarget={result.AtOrPastTarget} shouldConsume={result.ShouldConsume} beforeFloor={result.BeforeFloorSeqId} afterFloor={result.AfterFloorSeqId}");
+    }
+
+    private bool HandleHitFailedTooLate(MacroPlanEntry entry, double clockSeconds, double diffMs, string reason)
+    {
+        if (diffMs <= settings.MaxLateRetryMs)
+        {
+            return false;
+        }
+
+        if (settings.FailureMode == FailureMode.Skip)
+        {
+            log($"Hit failed too late; skipping. reason={reason} seqID={entry.SeqId} targetTime={entry.TargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s diffMs={diffMs:F3} maxLateRetryMs={settings.MaxLateRetryMs:F3}");
+            nextIndex++;
+            return true;
+        }
+
+        log($"Hit failed too late; stopping. reason={reason} seqID={entry.SeqId} targetTime={entry.TargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s diffMs={diffMs:F3} maxLateRetryMs={settings.MaxLateRetryMs:F3}");
+        Stop("hit failed too late");
+        return true;
     }
 
     private static bool IsStaleClockAtBeginning(double clockSeconds, int currentFloor, double firstTargetTime)

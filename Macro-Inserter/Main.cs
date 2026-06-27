@@ -13,6 +13,7 @@ public static class Main
     private static Harmony? harmony;
     private static UnityModManager.ModEntry? modEntry;
     private static string macroOffsetText = "0";
+    private static string maxLateRetryMsText = "250";
     private static string virtualInputKeyCountText = "1";
     private static bool enabled;
     private static float lastOnUpdateExceptionLogTime = -10.0f;
@@ -23,6 +24,7 @@ public static class Main
         modEntry = entry;
         settings = UnityModManager.ModSettings.Load<InternalMacroSettings>(entry);
         macroOffsetText = settings.MacroOffsetMs.ToString(CultureInfo.InvariantCulture);
+        maxLateRetryMsText = settings.MaxLateRetryMs.ToString(CultureInfo.InvariantCulture);
         virtualInputKeyCountText = settings.VirtualInputKeyCount.ToString(CultureInfo.InvariantCulture);
         service = new InternalMacroService(settings, Log);
 
@@ -113,8 +115,27 @@ public static class Main
         GUILayout.Label("HitInputEvent is the default Creplay-style path. DirectHit and InputPatch are fallback/experimental paths.");
 
         GUILayout.BeginHorizontal();
+        GUILayout.Label("FirstHitMode", GUILayout.Width(140f));
+        settings.FirstHitMode = (FirstHitMode)GUILayout.Toolbar((int)settings.FirstHitMode, new[] { "Manual", "InputPatch", "HitInputEvent" }, GUILayout.Width(360f));
+        GUILayout.EndHorizontal();
+
+        GUILayout.BeginHorizontal();
         GUILayout.Label("StateMode", GUILayout.Width(140f));
         settings.StateMode = (StateMode)GUILayout.Toolbar((int)settings.StateMode, new[] { "Default", "CapturedHumanState" }, GUILayout.Width(360f));
+        GUILayout.EndHorizontal();
+
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("FailureMode", GUILayout.Width(140f));
+        settings.FailureMode = (FailureMode)GUILayout.Toolbar((int)settings.FailureMode, new[] { "Stop", "Skip" }, GUILayout.Width(240f));
+        GUILayout.EndHorizontal();
+
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("MaxLateRetryMs", GUILayout.Width(140f));
+        maxLateRetryMsText = GUILayout.TextField(maxLateRetryMsText, GUILayout.Width(120f));
+        if (double.TryParse(maxLateRetryMsText, NumberStyles.Float, CultureInfo.InvariantCulture, out double maxLateRetryMs))
+        {
+            settings.MaxLateRetryMs = Math.Max(0.0, maxLateRetryMs);
+        }
         GUILayout.EndHorizontal();
 
         settings.DirectHitIgnoreInput = GUILayout.Toggle(settings.DirectHitIgnoreInput, "DirectHitIgnoreInput");

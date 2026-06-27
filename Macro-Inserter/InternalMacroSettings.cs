@@ -11,7 +11,10 @@ public sealed class InternalMacroSettings : UnityModManager.ModSettings
     public bool UseAudioTime = true;
     public ClockMode ClockMode = ClockMode.ConductorSongPosition;
     public FireMode FireMode = FireMode.HitInputEvent;
+    public FirstHitMode FirstHitMode = FirstHitMode.Manual;
     public StateMode StateMode = StateMode.Default;
+    public FailureMode FailureMode = FailureMode.Stop;
+    public double MaxLateRetryMs = 250.0;
     public bool DirectHitIgnoreInput = true;
     public string VirtualInputKey = "Space";
     public int VirtualInputKeyCount = 1;

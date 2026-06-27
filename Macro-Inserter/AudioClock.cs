@@ -117,7 +117,6 @@ internal sealed class AudioClock
         {
             if (!TryReadConductorSongPosition(out seconds))
             {
-                log("waiting for clock: scrConductor song position was not available.");
                 return false;
             }
 

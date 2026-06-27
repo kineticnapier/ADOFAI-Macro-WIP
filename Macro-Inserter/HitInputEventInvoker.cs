@@ -34,18 +34,18 @@ internal sealed class HitInputEventInvoker
         lastCapturedInputEventState = CloneObject(lastCapturedInputEventStateType, inputEventState) ?? inputEventState;
     }
 
-    public bool Invoke(int seqId, double audioTime)
+    public HitInvokeResult Invoke(int seqId, double audioTime)
     {
         object? controller = ReflectionCache.GetSingletonInstance("scrController");
         if (controller == null)
         {
             log("scrController.instance was not found for HitInputEvent.");
-            return false;
+            return CreateResult(false, -1, -1, seqId);
         }
 
         if (!EnsureReflectionReady())
         {
-            return false;
+            return CreateResult(false, -1, -1, seqId);
         }
 
         object? chosenPlanet = ReadChosenPlanet(controller);
@@ -60,7 +60,7 @@ internal sealed class HitInputEventInvoker
 
         log($"HitInputEvent before targetSeqID={seqId} controllerCurrFloorSeqID={controllerCurrSeqId} chosenPlanetCurrFloorSeqID={beforePlanetFloorSeq} chosenPlanetNextFloorSeqID={beforePlanetNextFloorSeq} resolvedNextFloorSeqID={nextSeqId} audioTime={audioTime:F6}s stateMode={settings.StateMode}");
 
-        CorrectCurrentState(controller, chosenPlanet, controllerCurrFloor, nextFloor);
+        CorrectCurrentState(controller, chosenPlanet, planetCurrFloor, controllerCurrFloor, nextFloor);
 
         object? inputEventState = CreateInputEventState();
         object? result;
@@ -73,7 +73,7 @@ internal sealed class HitInputEventInvoker
         {
             Exception root = ex.InnerException ?? ex;
             log($"HitInputEvent threw {ex.GetType().Name}: {root.GetType().Name}: {root.Message}. seqID={seqId} controllerCurrFloorSeqID={controllerCurrSeqId} chosenPlanetCurrFloorSeqID={beforePlanetFloorSeq} chosenPlanetNextFloorSeqID={beforePlanetNextFloorSeq} audioTime={audioTime:F6}s");
-            return false;
+            return CreateResult(false, beforePlanetFloorSeq, ReadFloorSeqId(ReadPlanetCurrFloor(ReadChosenPlanet(controller))), seqId);
         }
         finally
         {
@@ -85,17 +85,33 @@ internal sealed class HitInputEventInvoker
 
         if (result is bool accepted)
         {
-            log($"HitInputEvent after targetSeqID={seqId} result={accepted} beforePlanetFloorSeq={beforePlanetFloorSeq} afterPlanetFloorSeq={afterPlanetFloorSeq} audioTime={audioTime:F6}s");
-            if (accepted && afterPlanetFloorSeq != beforePlanetFloorSeq + 1)
+            HitInvokeResult invokeResult = CreateResult(accepted, beforePlanetFloorSeq, afterPlanetFloorSeq, seqId);
+            log($"HitInputEvent after targetSeqID={seqId} result={accepted} immediateAdvanced={invokeResult.ImmediateAdvanced} atOrPastTarget={invokeResult.AtOrPastTarget} shouldConsume={invokeResult.ShouldConsume} beforePlanetFloorSeq={beforePlanetFloorSeq} afterPlanetFloorSeq={afterPlanetFloorSeq} audioTime={audioTime:F6}s");
+            if (accepted && !invokeResult.ImmediateAdvanced)
             {
                 log($"HitInputEvent returned true but floor did not advance. targetSeqID={seqId} beforePlanetFloorSeq={beforePlanetFloorSeq} afterPlanetFloorSeq={afterPlanetFloorSeq}");
             }
 
-            return accepted;
+            return invokeResult;
         }
 
         log($"HitInputEvent returned non-bool result. seqID={seqId} controllerCurrFloorSeqID={controllerCurrSeqId} chosenPlanetCurrFloorSeqID={beforePlanetFloorSeq} chosenPlanetNextFloorSeqID={beforePlanetNextFloorSeq} audioTime={audioTime:F6}s");
-        return true;
+        return CreateResult(false, beforePlanetFloorSeq, afterPlanetFloorSeq, seqId);
+    }
+
+    private static HitInvokeResult CreateResult(bool accepted, int beforeFloorSeqId, int afterFloorSeqId, int targetSeqId)
+    {
+        bool immediateAdvanced = afterFloorSeqId > beforeFloorSeqId;
+        bool atOrPastTarget = afterFloorSeqId >= targetSeqId;
+        bool shouldConsume = accepted && atOrPastTarget;
+        return new HitInvokeResult(
+            accepted,
+            immediateAdvanced,
+            atOrPastTarget,
+            shouldConsume,
+            beforeFloorSeqId,
+            afterFloorSeqId,
+            targetSeqId);
     }
 
     private bool EnsureReflectionReady()
@@ -213,18 +229,23 @@ internal sealed class HitInputEventInvoker
         return clone;
     }
 
-    private void CorrectCurrentState(object controller, object? chosenPlanet, object? currFloor, object? nextFloor)
+    private void CorrectCurrentState(
+        object controller,
+        object? chosenPlanet,
+        object? planetCurrFloor,
+        object? controllerCurrFloor,
+        object? nextFloor)
     {
         CorrectCachedAngle(controller, chosenPlanet);
-        SyncMemberFromCurrentState(controller, "targetExitAngle", nextFloor, currFloor);
-        SyncMemberFromCurrentState(controller, "midspinInfiniteMargin", nextFloor, currFloor);
-        SyncMemberFromCurrentState(controller, "responsive", nextFloor, currFloor);
+        SyncMemberFromCurrentState(controller, "targetExitAngle", nextFloor, planetCurrFloor, controllerCurrFloor);
+        SyncMemberFromCurrentState(controller, "midspinInfiniteMargin", nextFloor, planetCurrFloor, controllerCurrFloor);
+        SyncMemberFromCurrentState(controller, "responsive", nextFloor, planetCurrFloor, controllerCurrFloor);
 
         if (chosenPlanet != null)
         {
-            SyncMemberFromCurrentState(chosenPlanet, "targetExitAngle", nextFloor, currFloor);
-            SyncMemberFromCurrentState(chosenPlanet, "midspinInfiniteMargin", nextFloor, currFloor);
-            SyncMemberFromCurrentState(chosenPlanet, "responsive", nextFloor, currFloor);
+            SyncMemberFromCurrentState(chosenPlanet, "targetExitAngle", nextFloor, planetCurrFloor, controllerCurrFloor);
+            SyncMemberFromCurrentState(chosenPlanet, "midspinInfiniteMargin", nextFloor, planetCurrFloor, controllerCurrFloor);
+            SyncMemberFromCurrentState(chosenPlanet, "responsive", nextFloor, planetCurrFloor, controllerCurrFloor);
         }
     }
 
