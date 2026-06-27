@@ -7,6 +7,8 @@ namespace Macro_Inserter;
 
 internal sealed class MacroPlanBuilder
 {
+    private const double DuplicateTargetTimeThresholdSeconds = 0.001;
+
     private readonly Action<string> log;
 
     public MacroPlanBuilder(Action<string> log)
@@ -31,25 +33,72 @@ internal sealed class MacroPlanBuilder
 
         double offsetSeconds = macroOffsetMs / 1000.0;
         List<MacroPlanEntry> entries = new();
+        HashSet<int> skippedMidspinSeqIds = new();
+        int skippedMidspinCount = 0;
 
         foreach (object floor in floors)
         {
+            if (IsMidspinFloor(floor, out int midspinSeqId))
+            {
+                skippedMidspinCount++;
+                if (midspinSeqId > 0)
+                {
+                    skippedMidspinSeqIds.Add(midspinSeqId);
+                }
+
+                if (logPreview)
+                {
+                    log($"MacroPlan skipped midspin seqID={midspinSeqId}");
+                }
+
+                continue;
+            }
+
             if (TryBuildEntry(floor, offsetSeconds, out MacroPlanEntry? entry) && entry != null)
             {
                 entries.Add(entry);
             }
         }
 
-        MacroPlanEntry[] plan = entries
+        MacroPlanEntry[] orderedEntries = entries
             .OrderBy(entry => entry.TargetTimeSeconds)
             .ThenBy(entry => entry.SeqId)
             .ToArray();
+        List<MacroPlanEntry> filteredEntries = new();
+        int skippedDuplicateTimeCount = 0;
+        MacroPlanEntry? previous = null;
+        foreach (MacroPlanEntry entry in orderedEntries)
+        {
+            if (previous != null &&
+                Math.Abs(entry.TargetTimeSeconds - previous.TargetTimeSeconds) < DuplicateTargetTimeThresholdSeconds)
+            {
+                skippedDuplicateTimeCount++;
+                if (logPreview)
+                {
+                    log($"MacroPlan skipped duplicate targetTime seqID={entry.SeqId} previousSeqID={previous.SeqId} targetTime={entry.TargetTimeSeconds:F6}s");
+                }
+
+                continue;
+            }
+
+            bool isNearMidspin = skippedMidspinSeqIds.Contains(entry.SeqId - 1) ||
+                                 skippedMidspinSeqIds.Contains(entry.SeqId + 1);
+            MacroPlanEntry filteredEntry = isNearMidspin
+                ? new MacroPlanEntry(entry.SeqId, entry.TargetTimeSeconds, isNearMidspin: true)
+                : entry;
+            filteredEntries.Add(filteredEntry);
+            previous = filteredEntry;
+        }
+
+        MacroPlanEntry[] plan = filteredEntries.ToArray();
 
         if (plan.Length == 0)
         {
             return new MacroPlanBuildResult(
                 plan,
-                "Macro plan is empty after filtering seqID <= 0 and targetTime <= 0.");
+                "Macro plan is empty after filtering seqID <= 0 and targetTime <= 0.",
+                skippedMidspinCount,
+                skippedDuplicateTimeCount);
         }
 
         if (logPreview)
@@ -60,7 +109,7 @@ internal sealed class MacroPlanBuilder
             }
         }
 
-        return new MacroPlanBuildResult(plan, failureReason: null);
+        return new MacroPlanBuildResult(plan, failureReason: null, skippedMidspinCount, skippedDuplicateTimeCount);
     }
 
     private static string CombineFailureReasons(params string?[] reasons)
@@ -158,5 +207,53 @@ internal sealed class MacroPlanBuilder
         {
             return false;
         }
+    }
+
+    private static bool IsMidspinFloor(object floor, out int seqId)
+    {
+        ReflectionCache.TryReadInt(floor, out seqId, "seqID", "seqId", "floorSeqID");
+        if (ReflectionCache.TryReadBool(
+                floor,
+                out bool boolMidspin,
+                "midspin",
+                "midSpin",
+                "isMidspin",
+                "isMidSpin",
+                "isMidspinFloor",
+                "isMidSpinFloor") &&
+            boolMidspin)
+        {
+            return true;
+        }
+
+        object? rawMidspin = ReflectionCache.ReadMember(floor, "midspinType", "midSpinType", "midspinState", "midSpinState");
+        if (rawMidspin != null &&
+            rawMidspin.ToString()?.IndexOf("mid", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            return true;
+        }
+
+        foreach (string angleName in new[] { "angle", "floorAngle", "entryAngle", "targetAngle", "targetExitAngle" })
+        {
+            object? rawAngle = ReflectionCache.ReadMember(floor, angleName);
+            if (rawAngle == null)
+            {
+                continue;
+            }
+
+            try
+            {
+                if (Math.Abs(Convert.ToDouble(rawAngle) - 999.0) < 0.001)
+                {
+                    return true;
+                }
+            }
+            catch
+            {
+                continue;
+            }
+        }
+
+        return false;
     }
 }

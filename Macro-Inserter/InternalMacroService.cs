@@ -14,6 +14,10 @@ internal sealed class InternalMacroService
     private const float PlayerControlTickLogIntervalSeconds = 1.0f;
     private const float FireSkipLogIntervalSeconds = 1.0f;
     private const double StaleClockStartMarginSeconds = 5.0;
+    private const int AdaptiveDiffWindowSize = 30;
+    private const double AdaptiveScale = 0.05;
+    private const double AdaptiveMaxStepMs = 0.5;
+    private const double AdaptiveMaxAbsMs = 30.0;
 
     private readonly InternalMacroSettings settings;
     private readonly Action<string> log;
@@ -26,6 +30,8 @@ internal sealed class InternalMacroService
     private IReadOnlyList<MacroPlanEntry> cachedPlan = Array.Empty<MacroPlanEntry>();
     private double cachedPlanOffsetMs = double.NaN;
     private string? cachedPlanSourceKey;
+    private int cachedSkippedMidspinCount;
+    private int cachedSkippedDuplicateTimeCount;
     private int nextIndex;
     private bool armed;
     private bool running;
@@ -42,10 +48,19 @@ internal sealed class InternalMacroService
     private int hitDiffSampleCount;
     private double hitDiffTotalMs;
     private double hitDiffMaxAbsMs;
+    private readonly Queue<double> recentDirectHitDiffMs = new();
+    private double adaptiveOffsetMs;
+    private double medianDiffMs;
+    private bool suppressNextAdaptiveCorrection;
 
     public int HitDiffSampleCount => hitDiffSampleCount;
     public double AverageHitDiffMs => hitDiffSampleCount == 0 ? 0.0 : hitDiffTotalMs / hitDiffSampleCount;
     public double MaxAbsHitDiffMs => hitDiffMaxAbsMs;
+    public double AdaptiveOffsetMs => adaptiveOffsetMs;
+    public double EffectiveOffsetMs => settings.MacroOffsetMs + adaptiveOffsetMs;
+    public double MedianDiffMs => medianDiffMs;
+    public int SkippedMidspinCount => cachedSkippedMidspinCount;
+    public int SkippedDuplicateTimeCount => cachedSkippedDuplicateTimeCount;
 
     public InternalMacroService(InternalMacroSettings settings, Action<string> log)
     {
@@ -96,7 +111,7 @@ internal sealed class InternalMacroService
         ReflectionCache.WarmupMembers("scrFloor", "seqID", "seqId", "floorSeqID", "nextfloor", "nextFloor", "next");
         ReflectionCache.WarmupMembers("scrPlanet", "currfloor", "currFloor", "currentFloor", "targetExitAngle", "midspinInfiniteMargin", "responsive", "cachedAngle");
         directHitInvoker.Warmup();
-        log($"Warmup Macro completed. planEntries={cachedPlan.Count}, fireMode={settings.FireMode}, clockMode={settings.ClockMode}");
+        log($"Warmup Macro completed. planEntries={cachedPlan.Count}, skippedMidspin={cachedSkippedMidspinCount}, skippedDuplicateTime={cachedSkippedDuplicateTimeCount}, fireMode={settings.FireMode}, clockMode={settings.ClockMode}");
     }
 
     public void Tick()
@@ -222,6 +237,7 @@ internal sealed class InternalMacroService
         armed = true;
         firstInputPatchScheduled = false;
         ResetHitDiffStats();
+        ResetAdaptiveOffset();
         nextIndex = 0;
         MacroPlanEntry firstEntry = plan[0];
         log($"Scheduler armed. entries={plan.Count}, firstSeqID={firstEntry.SeqId}, firstTargetTime={firstEntry.TargetTimeSeconds:F6}s, clockMode={settings.ClockMode}, fireMode={settings.FireMode}, dryRun={settings.DryRun}");
@@ -248,6 +264,8 @@ internal sealed class InternalMacroService
         cachedPlan = buildResult.Plan;
         cachedPlanOffsetMs = settings.MacroOffsetMs;
         cachedPlanSourceKey = ReadPlanSourceKey();
+        cachedSkippedMidspinCount = buildResult.SkippedMidspinCount;
+        cachedSkippedDuplicateTimeCount = buildResult.SkippedDuplicateTimeCount;
         if (cachedPlan.Count == 0)
         {
             LogStartFailure(buildResult.FailureReason ?? "Internal macro plan is empty.");
@@ -430,7 +448,7 @@ internal sealed class InternalMacroService
         }
 
         string nextSeqId = nextIndex < plan.Count ? plan[nextIndex].SeqId.ToString() : "<end>";
-        string nextTargetTime = nextIndex < plan.Count ? $"{plan[nextIndex].TargetTimeSeconds:F6}s" : "<end>";
+        string nextTargetTime = nextIndex < plan.Count ? $"{GetEffectiveTargetTimeSeconds(plan[nextIndex]):F6}s" : "<end>";
         int dueCount = CountDueEntries(clockSeconds);
 
         if (nextIndex >= plan.Count)
@@ -464,7 +482,8 @@ internal sealed class InternalMacroService
         while (nextIndex < plan.Count)
         {
             MacroPlanEntry entry = plan[nextIndex];
-            if (entry.TargetTimeSeconds > clockSeconds)
+            double effectiveTargetTimeSeconds = GetEffectiveTargetTimeSeconds(entry);
+            if (effectiveTargetTimeSeconds > clockSeconds)
             {
                 break;
             }
@@ -475,11 +494,14 @@ internal sealed class InternalMacroService
                 break;
             }
 
-            double diffMs = (clockSeconds - entry.TargetTimeSeconds) * 1000.0;
+            double diffMs = (clockSeconds - effectiveTargetTimeSeconds) * 1000.0;
 
-            if (currentFloorSeqId > entry.SeqId)
+            if (currentFloorSeqId >= entry.SeqId)
             {
-                LogNormal($"floorGuard skipped: already passed target. currentFloor={currentFloorSeqId} targetSeqID={entry.SeqId}");
+                string floorGuardReason = currentFloorSeqId > entry.SeqId
+                    ? "already passed target"
+                    : "already at target";
+                LogNormal($"floorGuard skipped: {floorGuardReason}. currentFloor={currentFloorSeqId} targetSeqID={entry.SeqId}");
                 nextIndex++;
                 continue;
             }
@@ -487,6 +509,7 @@ internal sealed class InternalMacroService
             if (currentFloorSeqId < entry.SeqId - 1)
             {
                 LogFireSkip($"floor not ready: currentFloor={currentFloorSeqId} targetSeqID={entry.SeqId} clockTime={clockSeconds:F6}s");
+                suppressNextAdaptiveCorrection = true;
                 if (HandleHitFailedTooLate(entry, clockSeconds, diffMs, "floor not ready"))
                 {
                     if (!running)
@@ -520,13 +543,13 @@ internal sealed class InternalMacroService
                 break;
             }
 
-            LogVerbose($"Fire attempt: seqID={entry.SeqId} targetTime={entry.TargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s diffMs={diffMs:F3} currentFloor={currentFloorSeqId} mode={settings.ClockMode} fireMode={settings.FireMode}");
+            LogVerbose($"Fire attempt: seqID={entry.SeqId} targetTime={effectiveTargetTimeSeconds:F6}s baseTargetTime={entry.TargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s diffMs={diffMs:F3} currentFloor={currentFloorSeqId} mode={settings.ClockMode} fireMode={settings.FireMode} adaptiveOffsetMs={adaptiveOffsetMs:F3}");
 
             if (settings.DryRun)
             {
-                LogNormal($"DryRun targetTime={entry.TargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s diffMs={diffMs:F3} seqID={entry.SeqId} currFloorSeqID={currentFloorSeqId} clockMode={settings.ClockMode}");
+                LogNormal($"DryRun targetTime={effectiveTargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s diffMs={diffMs:F3} seqID={entry.SeqId} currFloorSeqID={currentFloorSeqId} clockMode={settings.ClockMode}");
                 nextIndex++;
-                continue;
+                break;
             }
 
             if (settings.FireMode == FireMode.HitInputEvent)
@@ -542,10 +565,11 @@ internal sealed class InternalMacroService
                 {
                     RecordHitDiff(diffMs);
                     nextIndex++;
-                    continue;
+                    break;
                 }
 
                 LogNormal($"Hit failed; keeping nextIndex={nextIndex} seqID={entry.SeqId}");
+                suppressNextAdaptiveCorrection = true;
                 if (HandleHitFailedTooLate(entry, clockSeconds, diffMs, "HitInputEvent did not advance floor"))
                 {
                     if (!running)
@@ -572,11 +596,13 @@ internal sealed class InternalMacroService
                 if (result.ShouldConsume)
                 {
                     RecordHitDiff(diffMs);
+                    UpdateAdaptiveOffsetAfterDirectHit(diffMs, dueCount, entry);
                     nextIndex++;
-                    continue;
+                    break;
                 }
 
                 LogNormal($"Hit failed; keeping nextIndex={nextIndex} seqID={entry.SeqId}");
+                suppressNextAdaptiveCorrection = true;
                 if (HandleHitFailedTooLate(entry, clockSeconds, diffMs, "DirectHit did not advance floor"))
                 {
                     if (!running)
@@ -599,6 +625,7 @@ internal sealed class InternalMacroService
             InputPatchState.BeginFrame(virtualInputCount);
             LogNormal($"InputPatch mode does not confirm floor advancement. scheduled count=1 virtualKey={settings.VirtualInputKey} virtualKeyCount={virtualInputCount} clockTime={clockSeconds:F6}s currFloorSeqID={currentFloorSeqId} seqID={entry.SeqId}");
             nextIndex++;
+            break;
         }
     }
 
@@ -606,13 +633,18 @@ internal sealed class InternalMacroService
     {
         int count = 0;
         int index = nextIndex;
-        while (index < plan.Count && plan[index].TargetTimeSeconds <= clockSeconds)
+        while (index < plan.Count && GetEffectiveTargetTimeSeconds(plan[index]) <= clockSeconds)
         {
             count++;
             index++;
         }
 
         return count;
+    }
+
+    private double GetEffectiveTargetTimeSeconds(MacroPlanEntry entry)
+    {
+        return entry.TargetTimeSeconds + adaptiveOffsetMs / 1000.0;
     }
 
     private void LogHitResult(int currentFloorSeqId, HitInvokeResult result)
@@ -632,6 +664,55 @@ internal sealed class InternalMacroService
         hitDiffSampleCount = 0;
         hitDiffTotalMs = 0.0;
         hitDiffMaxAbsMs = 0.0;
+        recentDirectHitDiffMs.Clear();
+        medianDiffMs = 0.0;
+    }
+
+    private void ResetAdaptiveOffset()
+    {
+        adaptiveOffsetMs = 0.0;
+        suppressNextAdaptiveCorrection = false;
+    }
+
+    private void UpdateAdaptiveOffsetAfterDirectHit(double diffMs, int dueCount, MacroPlanEntry entry)
+    {
+        recentDirectHitDiffMs.Enqueue(diffMs);
+        while (recentDirectHitDiffMs.Count > AdaptiveDiffWindowSize)
+        {
+            recentDirectHitDiffMs.Dequeue();
+        }
+
+        medianDiffMs = CalculateMedian(recentDirectHitDiffMs);
+
+        if (dueCount > 1 ||
+            entry.IsNearMidspin ||
+            suppressNextAdaptiveCorrection)
+        {
+            suppressNextAdaptiveCorrection = false;
+            return;
+        }
+
+        double correctionMs = Math.Max(
+            -AdaptiveMaxStepMs,
+            Math.Min(AdaptiveMaxStepMs, -medianDiffMs * AdaptiveScale));
+        adaptiveOffsetMs = Math.Max(
+            -AdaptiveMaxAbsMs,
+            Math.Min(AdaptiveMaxAbsMs, adaptiveOffsetMs + correctionMs));
+        LogVerbose($"AdaptiveOffset updated. medianDiffMs={medianDiffMs:F3} correctionMs={correctionMs:F3} adaptiveOffsetMs={adaptiveOffsetMs:F3} effectiveOffsetMs={EffectiveOffsetMs:F3}");
+    }
+
+    private static double CalculateMedian(IEnumerable<double> values)
+    {
+        double[] sorted = values.OrderBy(value => value).ToArray();
+        if (sorted.Length == 0)
+        {
+            return 0.0;
+        }
+
+        int middle = sorted.Length / 2;
+        return sorted.Length % 2 == 0
+            ? (sorted[middle - 1] + sorted[middle]) * 0.5
+            : sorted[middle];
     }
 
     private bool HandleHitFailedTooLate(MacroPlanEntry entry, double clockSeconds, double diffMs, string reason)
@@ -641,6 +722,7 @@ internal sealed class InternalMacroService
             return false;
         }
 
+        suppressNextAdaptiveCorrection = true;
         if (settings.FailureMode == FailureMode.Skip)
         {
             log($"Hit failed too late; skipping. reason={reason} seqID={entry.SeqId} targetTime={entry.TargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s diffMs={diffMs:F3} maxLateRetryMs={settings.MaxLateRetryMs:F3}");

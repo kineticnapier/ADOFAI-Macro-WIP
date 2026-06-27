@@ -146,6 +146,8 @@ public static class Main
 
         if (service != null)
         {
+            GUILayout.Label($"Offset base={settings.MacroOffsetMs:F3}ms adaptive={service.AdaptiveOffsetMs:F3}ms effective={service.EffectiveOffsetMs:F3}ms medianDiff={service.MedianDiffMs:F3}ms");
+            GUILayout.Label($"Plan skipped midspin={service.SkippedMidspinCount} duplicateTime={service.SkippedDuplicateTimeCount}");
             GUILayout.Label($"Hit diff avg={service.AverageHitDiffMs:F3}ms maxAbs={service.MaxAbsHitDiffMs:F3}ms samples={service.HitDiffSampleCount}");
         }
 
