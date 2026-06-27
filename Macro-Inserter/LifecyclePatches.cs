@@ -10,23 +10,37 @@ internal static class LifecyclePatches
 {
     private static readonly string[] StopMethodNames =
     {
-        "Fail2Action",
-        "Won_Update",
-        "QuitToMainMenu",
         "SwitchToEditMode",
-        "OnLandOnPortal"
+        "Restart",
+        "QuitToMainMenu",
+        "Won_Update"
     };
 
     private static Func<InternalMacroService?>? getService;
+    private static Func<InternalMacroSettings>? getSettings;
 
-    public static void Apply(Harmony harmony, Action<string> log, Func<InternalMacroService?> serviceAccessor)
+    public static void Apply(
+        Harmony harmony,
+        Action<string> log,
+        Func<InternalMacroService?> serviceAccessor,
+        Func<InternalMacroSettings> settingsAccessor)
     {
         getService = serviceAccessor;
+        getSettings = settingsAccessor;
 
         PatchStartRewind(harmony, log);
         foreach (string methodName in StopMethodNames)
         {
-            PatchStopMethod(harmony, log, methodName);
+            PatchStopMethod(harmony, log, methodName, nameof(StopSchedulerPrefix));
+        }
+
+        if (getSettings().EnableFail2ActionStopPatch)
+        {
+            PatchStopMethod(harmony, log, "Fail2Action", nameof(Fail2ActionStopSchedulerPrefix));
+        }
+        else
+        {
+            log("Patch skipped: Fail2Action lifecycle stop is disabled.");
         }
     }
 
@@ -48,9 +62,9 @@ internal static class LifecyclePatches
         log($"Patch applied: scrController.Start_Rewind postfix ({targets.Count} overloads)");
     }
 
-    private static void PatchStopMethod(Harmony harmony, Action<string> log, string methodName)
+    private static void PatchStopMethod(Harmony harmony, Action<string> log, string methodName, string patchMethodName)
     {
-        MethodInfo? prefix = typeof(LifecyclePatches).GetMethod(nameof(StopSchedulerPrefix), BindingFlags.Static | BindingFlags.NonPublic);
+        MethodInfo? prefix = typeof(LifecyclePatches).GetMethod(patchMethodName, BindingFlags.Static | BindingFlags.NonPublic);
         if (prefix == null)
         {
             log($"Patch skipped: lifecycle stop patch method was not found for {methodName}.");
@@ -90,5 +104,15 @@ internal static class LifecyclePatches
     private static void StopSchedulerPrefix(MethodBase __originalMethod)
     {
         getService?.Invoke()?.Stop($"stop patch: {__originalMethod.Name}");
+    }
+
+    private static void Fail2ActionStopSchedulerPrefix(MethodBase __originalMethod)
+    {
+        if (getSettings?.Invoke().EnableFail2ActionStopPatch != true)
+        {
+            return;
+        }
+
+        getService?.Invoke()?.StopFromFail2Action(__originalMethod.Name);
     }
 }

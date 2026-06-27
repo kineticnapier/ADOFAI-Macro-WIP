@@ -28,7 +28,7 @@ public static class Main
 
         harmony = new Harmony(entry.Info.Id);
         InputPatches.Apply(harmony, Log, () => service);
-        LifecyclePatches.Apply(harmony, Log, () => service);
+        LifecyclePatches.Apply(harmony, Log, () => service, () => settings);
 
         entry.OnToggle = OnToggle;
         entry.OnGUI = OnGUI;
@@ -90,6 +90,7 @@ public static class Main
         settings.EnableInternalMacro = GUILayout.Toggle(settings.EnableInternalMacro, "EnableInternalMacro");
         settings.DryRun = GUILayout.Toggle(settings.DryRun, "DryRun");
         settings.StartFromCurrentFloor = GUILayout.Toggle(settings.StartFromCurrentFloor, "StartFromCurrentFloor");
+        settings.EnableFail2ActionStopPatch = GUILayout.Toggle(settings.EnableFail2ActionStopPatch, "EnableFail2ActionStopPatch");
 
         GUILayout.BeginHorizontal();
         GUILayout.Label("MacroOffsetMs", GUILayout.Width(140f));

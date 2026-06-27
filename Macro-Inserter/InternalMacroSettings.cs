@@ -7,7 +7,8 @@ public sealed class InternalMacroSettings : UnityModManager.ModSettings
     public bool EnableInternalMacro = false;
     public bool DryRun = false;
     public double MacroOffsetMs = 0.0;
-    public bool StartFromCurrentFloor = true;
+    public bool StartFromCurrentFloor = false;
+    public bool EnableFail2ActionStopPatch = false;
     public bool UseAudioTime = true;
     public ClockMode ClockMode = ClockMode.ConductorSongPosition;
     public FireMode FireMode = FireMode.HitInputEvent;

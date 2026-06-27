@@ -78,6 +78,35 @@ internal static class RuntimeSafety
         return IsUnityModManagerUiOpen();
     }
 
+    public static bool IsControllerFailed()
+    {
+        object? controller = ReflectionCache.GetSingletonInstance("scrController");
+        if (controller == null)
+        {
+            return false;
+        }
+
+        object? raw = ReflectionCache.ReadMember(
+            controller,
+            "failed",
+            "isFailed",
+            "hasFailed",
+            "gameFailed",
+            "isGameOver",
+            "fail");
+
+        if (raw is bool failed)
+        {
+            return failed;
+        }
+
+        string? state = ReflectionCache
+            .ReadMember(controller, "state", "currentState", "gameState", "playerState")
+            ?.ToString();
+
+        return state?.IndexOf("fail", StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
     private static bool IsTextInputFocused()
     {
         EventSystem eventSystem = EventSystem.current;

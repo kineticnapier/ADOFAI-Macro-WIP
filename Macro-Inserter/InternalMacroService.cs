@@ -10,6 +10,7 @@ internal sealed class InternalMacroService
     private const float StartFailureLogIntervalSeconds = 1.0f;
     private const float ClockLostLogIntervalSeconds = 1.0f;
     private const float CurrentFloorLostLogIntervalSeconds = 1.0f;
+    private const float Fail2ActionGraceSeconds = 0.5f;
 
     private readonly InternalMacroSettings settings;
     private readonly Action<string> log;
@@ -23,6 +24,8 @@ internal sealed class InternalMacroService
     private bool running;
     private FireMode runningFireMode;
     private ClockMode runningClockMode;
+    private float runningStartedAtUnscaledTime;
+    private double firstTargetTimeSeconds;
     private float lastStartFailureLogTime = -10.0f;
     private string? lastStartFailureReason;
     private float lastClockLostLogTime = -10.0f;
@@ -129,6 +132,36 @@ internal sealed class InternalMacroService
         log($"Internal macro scheduler stopped. reason={reason}");
     }
 
+    public void StopFromFail2Action(string methodName)
+    {
+        if (!running)
+        {
+            return;
+        }
+
+        if (Time.unscaledTime - runningStartedAtUnscaledTime <= Fail2ActionGraceSeconds)
+        {
+            return;
+        }
+
+        if (!audioClock.TryGetSeconds(runningClockMode, out double clockSeconds))
+        {
+            return;
+        }
+
+        if (clockSeconds < firstTargetTimeSeconds)
+        {
+            return;
+        }
+
+        if (!RuntimeSafety.IsControllerFailed())
+        {
+            return;
+        }
+
+        Stop($"stop patch: {methodName}");
+    }
+
     private bool TryStart()
     {
         MacroPlanBuildResult buildResult = planBuilder.Build(settings.MacroOffsetMs);
@@ -156,6 +189,8 @@ internal sealed class InternalMacroService
         runningFireMode = settings.FireMode;
         runningClockMode = settings.ClockMode;
         MacroPlanEntry firstEntry = plan[nextIndex];
+        runningStartedAtUnscaledTime = Time.unscaledTime;
+        firstTargetTimeSeconds = firstEntry.TargetTimeSeconds;
         log($"Scheduler started. entries={plan.Count}, startIndex={nextIndex}, firstSeqID={firstEntry.SeqId}, firstTargetTime={firstEntry.TargetTimeSeconds:F6}s, clockTime={clockSeconds:F6}s, clockMode={settings.ClockMode}, fireMode={settings.FireMode}, dryRun={settings.DryRun}");
         return true;
     }
@@ -177,6 +212,11 @@ internal sealed class InternalMacroService
     {
         int byTime = FindFirstAtOrAfterAudioTime(audioSeconds);
         if (!settings.StartFromCurrentFloor)
+        {
+            return byTime;
+        }
+
+        if (byTime == 0 && plan.Count > 0 && audioSeconds < plan[0].TargetTimeSeconds)
         {
             return byTime;
         }
@@ -225,17 +265,10 @@ internal sealed class InternalMacroService
         string nextSeqId = nextIndex < plan.Count ? plan[nextIndex].SeqId.ToString() : "<end>";
         string nextTargetTime = nextIndex < plan.Count ? $"{plan[nextIndex].TargetTimeSeconds:F6}s" : "<end>";
         int dueCount = CountDueEntries(clockSeconds);
-        log($"FireDueInputs nextIndex={nextIndex} nextSeqID={nextSeqId} nextTargetTime={nextTargetTime} clockTime={clockSeconds:F6}s dueCount={dueCount}");
 
         if (nextIndex >= plan.Count)
         {
             Stop("end of plan");
-            return;
-        }
-
-        if (!TryReadCurrentFloorSeqId(out int currentFloorSeqId))
-        {
-            LogCurrentFloorLost();
             return;
         }
 
@@ -249,6 +282,14 @@ internal sealed class InternalMacroService
 
         if (due.Count == 0)
         {
+            return;
+        }
+
+        log($"FireDueInputs nextIndex={nextIndex - due.Count} nextSeqID={nextSeqId} nextTargetTime={nextTargetTime} clockTime={clockSeconds:F6}s dueCount={dueCount}");
+
+        if (!TryReadCurrentFloorSeqId(out int currentFloorSeqId))
+        {
+            LogCurrentFloorLost();
             return;
         }
 
