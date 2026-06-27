@@ -10,7 +10,10 @@ internal sealed class InternalMacroService
     private const float StartFailureLogIntervalSeconds = 1.0f;
     private const float ClockLostLogIntervalSeconds = 1.0f;
     private const float CurrentFloorLostLogIntervalSeconds = 1.0f;
-    private const float Fail2ActionGraceSeconds = 0.5f;
+    private const float ClockResetWaitLogIntervalSeconds = 1.0f;
+    private const float PlayerControlTickLogIntervalSeconds = 1.0f;
+    private const float FireSkipLogIntervalSeconds = 1.0f;
+    private const double StaleClockStartMarginSeconds = 5.0;
 
     private readonly InternalMacroSettings settings;
     private readonly Action<string> log;
@@ -21,15 +24,17 @@ internal sealed class InternalMacroService
 
     private IReadOnlyList<MacroPlanEntry> plan = Array.Empty<MacroPlanEntry>();
     private int nextIndex;
+    private bool armed;
     private bool running;
     private FireMode runningFireMode;
     private ClockMode runningClockMode;
-    private float runningStartedAtUnscaledTime;
-    private double firstTargetTimeSeconds;
     private float lastStartFailureLogTime = -10.0f;
     private string? lastStartFailureReason;
     private float lastClockLostLogTime = -10.0f;
     private float lastCurrentFloorLostLogTime = -10.0f;
+    private float lastClockResetWaitLogTime = -10.0f;
+    private float lastPlayerControlTickLogTime = -10.0f;
+    private float lastFireSkipLogTime = -10.0f;
 
     public InternalMacroService(InternalMacroSettings settings, Action<string> log)
     {
@@ -37,7 +42,7 @@ internal sealed class InternalMacroService
         this.log = log;
         planBuilder = new MacroPlanBuilder(log);
         audioClock = new AudioClock(log);
-        hitInputEventInvoker = new HitInputEventInvoker(log);
+        hitInputEventInvoker = new HitInputEventInvoker(settings, log);
         directHitInvoker = new DirectHitInvoker(settings, log);
     }
 
@@ -56,6 +61,22 @@ internal sealed class InternalMacroService
 
     public void TickForPlayerControlUpdate()
     {
+        LogPlayerControlUpdateTick();
+
+        if (!settings.EnableInternalMacro)
+        {
+            Stop("settings disabled");
+            return;
+        }
+
+        if (armed && !running)
+        {
+            if (TryStartArmedFromPlayerControlUpdate())
+            {
+                return;
+            }
+        }
+
         if (!EnsureRunningForCurrentSettings())
         {
             return;
@@ -85,7 +106,7 @@ internal sealed class InternalMacroService
         }
 
         Stop("start rewind");
-        TryStart();
+        BuildPlanAndArm();
     }
 
     private bool EnsureRunningForCurrentSettings()
@@ -120,49 +141,22 @@ internal sealed class InternalMacroService
 
     public void Stop(string reason)
     {
-        if (!running)
-        {
-            return;
-        }
-
+        bool wasRunning = running;
+        armed = false;
         running = false;
         plan = Array.Empty<MacroPlanEntry>();
         nextIndex = 0;
         InputPatchState.Reset();
+
+        if (!wasRunning)
+        {
+            return;
+        }
+
         log($"Internal macro scheduler stopped. reason={reason}");
     }
 
-    public void StopFromFail2Action(string methodName)
-    {
-        if (!running)
-        {
-            return;
-        }
-
-        if (Time.unscaledTime - runningStartedAtUnscaledTime <= Fail2ActionGraceSeconds)
-        {
-            return;
-        }
-
-        if (!audioClock.TryGetSeconds(runningClockMode, out double clockSeconds))
-        {
-            return;
-        }
-
-        if (clockSeconds < firstTargetTimeSeconds)
-        {
-            return;
-        }
-
-        if (!RuntimeSafety.IsControllerFailed())
-        {
-            return;
-        }
-
-        Stop($"stop patch: {methodName}");
-    }
-
-    private bool TryStart()
+    private bool BuildPlanAndArm()
     {
         MacroPlanBuildResult buildResult = planBuilder.Build(settings.MacroOffsetMs);
         plan = buildResult.Plan;
@@ -172,26 +166,55 @@ internal sealed class InternalMacroService
             return false;
         }
 
-        if (!audioClock.TryStart(settings.ClockMode, out double clockSeconds))
+        armed = true;
+        nextIndex = 0;
+        MacroPlanEntry firstEntry = plan[0];
+        log($"Scheduler armed. entries={plan.Count}, firstSeqID={firstEntry.SeqId}, firstTargetTime={firstEntry.TargetTimeSeconds:F6}s, clockMode={settings.ClockMode}, fireMode={settings.FireMode}, dryRun={settings.DryRun}");
+        return true;
+    }
+
+    private bool TryStartArmedFromPlayerControlUpdate()
+    {
+        if (plan.Count == 0)
         {
-            plan = Array.Empty<MacroPlanEntry>();
+            armed = false;
             return false;
         }
 
-        nextIndex = ResolveStartIndex(clockSeconds);
+        if (!RuntimeSafety.IsAllowedPlaybackState() || RuntimeSafety.IsPaused() || RuntimeSafety.IsUiBlockingStart())
+        {
+            return false;
+        }
+
+        if (!audioClock.TryStart(settings.ClockMode, out double clockSeconds, logReady: false))
+        {
+            return false;
+        }
+
+        MacroPlanEntry firstPlanEntry = plan[0];
+        bool hasCurrentFloor = TryReadCurrentFloorSeqId(out int currentFloor);
+        if (hasCurrentFloor && IsStaleClockAtBeginning(clockSeconds, currentFloor, firstPlanEntry.TargetTimeSeconds))
+        {
+            LogWaitingForClockReset(clockSeconds, currentFloor, firstPlanEntry.TargetTimeSeconds);
+            return false;
+        }
+
+        nextIndex = ResolveStartIndex(clockSeconds, hasCurrentFloor, currentFloor);
         if (nextIndex >= plan.Count)
         {
             log($"Internal macro plan has no remaining entries. entries={plan.Count}, clockTime={clockSeconds:F6}s, mode={settings.ClockMode}");
+            armed = false;
             return false;
         }
 
+        armed = false;
         running = true;
         runningFireMode = settings.FireMode;
         runningClockMode = settings.ClockMode;
         MacroPlanEntry firstEntry = plan[nextIndex];
-        runningStartedAtUnscaledTime = Time.unscaledTime;
-        firstTargetTimeSeconds = firstEntry.TargetTimeSeconds;
-        log($"Scheduler started. entries={plan.Count}, startIndex={nextIndex}, firstSeqID={firstEntry.SeqId}, firstTargetTime={firstEntry.TargetTimeSeconds:F6}s, clockTime={clockSeconds:F6}s, clockMode={settings.ClockMode}, fireMode={settings.FireMode}, dryRun={settings.DryRun}");
+        string currentFloorText = hasCurrentFloor ? currentFloor.ToString() : "<unavailable>";
+        log($"Scheduler started. entries={plan.Count}, startIndex={nextIndex}, firstSeqID={firstEntry.SeqId}, firstTargetTime={firstEntry.TargetTimeSeconds:F6}s, clockTime={clockSeconds:F6}s, currentFloor={currentFloorText}, clockMode={settings.ClockMode}, fireMode={settings.FireMode}, dryRun={settings.DryRun}");
+        FireDueInputs(allowDirectHit: true, allowInputPatch: true);
         return true;
     }
 
@@ -208,22 +231,11 @@ internal sealed class InternalMacroService
         log(reason);
     }
 
-    private int ResolveStartIndex(double audioSeconds)
+    private int ResolveStartIndex(double audioSeconds, bool hasCurrentFloor, int currentFloor)
     {
-        int byTime = FindFirstAtOrAfterAudioTime(audioSeconds);
-        if (!settings.StartFromCurrentFloor)
+        if (!hasCurrentFloor)
         {
-            return byTime;
-        }
-
-        if (byTime == 0 && plan.Count > 0 && audioSeconds < plan[0].TargetTimeSeconds)
-        {
-            return byTime;
-        }
-
-        if (!TryReadCurrentFloorSeqId(out int currentFloor))
-        {
-            return byTime;
+            return FindFirstAtOrAfterAudioTime(audioSeconds);
         }
 
         int byFloor = 0;
@@ -232,7 +244,7 @@ internal sealed class InternalMacroService
             byFloor++;
         }
 
-        return Math.Max(byTime, byFloor);
+        return byFloor;
     }
 
     private int FindFirstAtOrAfterAudioTime(double audioSeconds)
@@ -272,24 +284,46 @@ internal sealed class InternalMacroService
             return;
         }
 
+        if (TryReadCurrentFloorSeqId(out int currentFloorSeqId) &&
+            plan.Count > 0 &&
+            IsStaleClockAtBeginning(clockSeconds, currentFloorSeqId, plan[0].TargetTimeSeconds))
+        {
+            LogFireSkip($"clock stale: currentFloor={currentFloorSeqId} firstTargetTime={plan[0].TargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s");
+            return;
+        }
+
+        if (dueCount == 0)
+        {
+            LogFireSkip($"dueCount=0 nextIndex={nextIndex} nextSeqID={nextSeqId} nextTargetTime={nextTargetTime} clockTime={clockSeconds:F6}s");
+            return;
+        }
+
+        if (!TryReadCurrentFloorSeqId(out currentFloorSeqId))
+        {
+            LogCurrentFloorLost();
+            return;
+        }
+
+        log($"FireDueInputs nextIndex={nextIndex} nextSeqID={nextSeqId} nextTargetTime={nextTargetTime} clockTime={clockSeconds:F6}s dueCount={dueCount}");
+
         List<MacroPlanEntry> due = new();
         while (nextIndex < plan.Count &&
                plan[nextIndex].TargetTimeSeconds <= clockSeconds)
         {
-            due.Add(plan[nextIndex]);
+            MacroPlanEntry entry = plan[nextIndex];
+            if (currentFloorSeqId > entry.SeqId)
+            {
+                log($"floorGuard skipped: currentFloor={currentFloorSeqId} targetSeqID={entry.SeqId}");
+                nextIndex++;
+                continue;
+            }
+
+            due.Add(entry);
             nextIndex++;
         }
 
         if (due.Count == 0)
         {
-            return;
-        }
-
-        log($"FireDueInputs nextIndex={nextIndex - due.Count} nextSeqID={nextSeqId} nextTargetTime={nextTargetTime} clockTime={clockSeconds:F6}s dueCount={dueCount}");
-
-        if (!TryReadCurrentFloorSeqId(out int currentFloorSeqId))
-        {
-            LogCurrentFloorLost();
             return;
         }
 
@@ -362,6 +396,45 @@ internal sealed class InternalMacroService
         }
 
         return count;
+    }
+
+    private static bool IsStaleClockAtBeginning(double clockSeconds, int currentFloor, double firstTargetTime)
+    {
+        return currentFloor <= 1 &&
+               clockSeconds > firstTargetTime + StaleClockStartMarginSeconds;
+    }
+
+    private void LogWaitingForClockReset(double clockSeconds, int currentFloor, double firstTargetTime)
+    {
+        if (Time.unscaledTime - lastClockResetWaitLogTime < ClockResetWaitLogIntervalSeconds)
+        {
+            return;
+        }
+
+        lastClockResetWaitLogTime = Time.unscaledTime;
+        log($"waiting for clock reset: currentFloor={currentFloor} firstTargetTime={firstTargetTime:F6}s clockTime={clockSeconds:F6}s");
+    }
+
+    private void LogPlayerControlUpdateTick()
+    {
+        if (Time.unscaledTime - lastPlayerControlTickLogTime < PlayerControlTickLogIntervalSeconds)
+        {
+            return;
+        }
+
+        lastPlayerControlTickLogTime = Time.unscaledTime;
+        log($"PlayerControl_Update tick received. armed={armed} running={running}");
+    }
+
+    private void LogFireSkip(string reason)
+    {
+        if (Time.unscaledTime - lastFireSkipLogTime < FireSkipLogIntervalSeconds)
+        {
+            return;
+        }
+
+        lastFireSkipLogTime = Time.unscaledTime;
+        log($"FireDueInputs skipped: {reason}");
     }
 
     private void LogClockLost()

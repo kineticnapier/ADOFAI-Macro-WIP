@@ -15,6 +15,7 @@ internal static class InputPatches
 
         PatchPostfix(harmony, log, "ValidInputWasTriggered", nameof(ValidInputWasTriggeredPostfix));
         PatchPrefix(harmony, log, "CountValidKeysPressed", nameof(CountValidKeysPressedPrefix));
+        PatchHitInputEventCapture(harmony, log);
         PatchPlayerControlUpdate(harmony, log);
     }
 
@@ -68,6 +69,23 @@ internal static class InputPatches
         log($"Patch applied: scrController.PlayerControl_Update ({targets.Count} overloads)");
     }
 
+    private static void PatchHitInputEventCapture(Harmony harmony, Action<string> log)
+    {
+        Type? inputEventStateType = ReflectionCache.FindType("InputEventState");
+        MethodInfo? target = inputEventStateType == null
+            ? null
+            : ReflectionCache.FindMethod("scrController", "HitInputEvent", typeof(bool), inputEventStateType);
+        MethodInfo? prefix = typeof(InputPatches).GetMethod(nameof(HitInputEventPrefix), BindingFlags.Static | BindingFlags.NonPublic);
+        if (target == null || prefix == null)
+        {
+            log("Patch skipped: scrController.HitInputEvent capture was not found.");
+            return;
+        }
+
+        harmony.Patch(target, prefix: new HarmonyMethod(prefix));
+        log("Patch applied: scrController.HitInputEvent capture");
+    }
+
     private static void ValidInputWasTriggeredPostfix(ref bool __result)
     {
         if (InputPatchState.HasScheduledInput())
@@ -85,6 +103,11 @@ internal static class InputPatches
 
         __result = keyCount;
         return false;
+    }
+
+    private static void HitInputEventPrefix(bool __0, object? __1)
+    {
+        HitInputEventInvoker.CaptureHumanInputEventState(__0, __1);
     }
 
     private static void PlayerControlUpdatePrefix()

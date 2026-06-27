@@ -8,13 +8,30 @@ internal sealed class HitInputEventInvoker
 {
     private const bool IsAuto = false;
 
+    private static object? lastCapturedInputEventState;
+    private static Type? lastCapturedInputEventStateType;
+    private static bool macroInvokeInProgress;
+
+    private readonly InternalMacroSettings settings;
     private readonly Action<string> log;
     private Type? inputEventStateType;
     private MethodInfo? hitInputEventMethod;
 
-    public HitInputEventInvoker(Action<string> log)
+    public HitInputEventInvoker(InternalMacroSettings settings, Action<string> log)
     {
+        this.settings = settings;
         this.log = log;
+    }
+
+    public static void CaptureHumanInputEventState(bool isAuto, object? inputEventState)
+    {
+        if (macroInvokeInProgress || isAuto || inputEventState == null)
+        {
+            return;
+        }
+
+        lastCapturedInputEventStateType = inputEventState.GetType();
+        lastCapturedInputEventState = CloneObject(lastCapturedInputEventStateType, inputEventState) ?? inputEventState;
     }
 
     public bool Invoke(int seqId, double audioTime)
@@ -31,34 +48,53 @@ internal sealed class HitInputEventInvoker
             return false;
         }
 
-        object? chosenPlanet = ReflectionCache.ReadMember(controller, "chosenPlanet", "selectedPlanet");
-        object? currFloor = ReflectionCache.ReadMember(controller, "currFloor", "currentFloor");
-        object? nextFloor = ReflectionCache.ReadMember(controller, "nextfloor", "nextFloor");
-        int currSeqId = ReadFloorSeqId(currFloor);
+        object? chosenPlanet = ReadChosenPlanet(controller);
+        object? controllerCurrFloor = ReadControllerCurrFloor(controller);
+        object? planetCurrFloor = ReadPlanetCurrFloor(chosenPlanet);
+        object? planetNextFloor = ReadNextFloor(planetCurrFloor);
+        object? nextFloor = planetNextFloor ?? ReflectionCache.ReadMember(controller, "nextfloor", "nextFloor");
+        int controllerCurrSeqId = ReadFloorSeqId(controllerCurrFloor);
+        int beforePlanetFloorSeq = ReadFloorSeqId(planetCurrFloor);
+        int beforePlanetNextFloorSeq = ReadFloorSeqId(planetNextFloor);
         int nextSeqId = ReadFloorSeqId(nextFloor);
 
-        CorrectCurrentState(controller, chosenPlanet, currFloor, nextFloor);
+        log($"HitInputEvent before targetSeqID={seqId} controllerCurrFloorSeqID={controllerCurrSeqId} chosenPlanetCurrFloorSeqID={beforePlanetFloorSeq} chosenPlanetNextFloorSeqID={beforePlanetNextFloorSeq} resolvedNextFloorSeqID={nextSeqId} audioTime={audioTime:F6}s stateMode={settings.StateMode}");
 
-        object? inputEventState = CreateDefaultInputEventState();
+        CorrectCurrentState(controller, chosenPlanet, controllerCurrFloor, nextFloor);
+
+        object? inputEventState = CreateInputEventState();
         object? result;
         try
         {
+            macroInvokeInProgress = true;
             result = hitInputEventMethod!.Invoke(controller, new[] { (object)IsAuto, inputEventState });
         }
         catch (Exception ex)
         {
             Exception root = ex.InnerException ?? ex;
-            log($"HitInputEvent threw {ex.GetType().Name}: {root.GetType().Name}: {root.Message}. seqID={seqId} currFloorSeqID={currSeqId} nextFloorSeqID={nextSeqId} audioTime={audioTime:F6}s");
+            log($"HitInputEvent threw {ex.GetType().Name}: {root.GetType().Name}: {root.Message}. seqID={seqId} controllerCurrFloorSeqID={controllerCurrSeqId} chosenPlanetCurrFloorSeqID={beforePlanetFloorSeq} chosenPlanetNextFloorSeqID={beforePlanetNextFloorSeq} audioTime={audioTime:F6}s");
             return false;
         }
+        finally
+        {
+            macroInvokeInProgress = false;
+        }
+
+        object? afterPlanetCurrFloor = ReadPlanetCurrFloor(ReadChosenPlanet(controller));
+        int afterPlanetFloorSeq = ReadFloorSeqId(afterPlanetCurrFloor);
 
         if (result is bool accepted)
         {
-            log($"HitInputEvent result={accepted} isAuto={IsAuto} seqID={seqId} currFloorSeqID={currSeqId} nextFloorSeqID={nextSeqId} audioTime={audioTime:F6}s");
+            log($"HitInputEvent after targetSeqID={seqId} result={accepted} beforePlanetFloorSeq={beforePlanetFloorSeq} afterPlanetFloorSeq={afterPlanetFloorSeq} audioTime={audioTime:F6}s");
+            if (accepted && afterPlanetFloorSeq != beforePlanetFloorSeq + 1)
+            {
+                log($"HitInputEvent returned true but floor did not advance. targetSeqID={seqId} beforePlanetFloorSeq={beforePlanetFloorSeq} afterPlanetFloorSeq={afterPlanetFloorSeq}");
+            }
+
             return accepted;
         }
 
-        log($"HitInputEvent returned non-bool result. seqID={seqId} currFloorSeqID={currSeqId} nextFloorSeqID={nextSeqId} audioTime={audioTime:F6}s");
+        log($"HitInputEvent returned non-bool result. seqID={seqId} controllerCurrFloorSeqID={controllerCurrSeqId} chosenPlanetCurrFloorSeqID={beforePlanetFloorSeq} chosenPlanetNextFloorSeqID={beforePlanetNextFloorSeq} audioTime={audioTime:F6}s");
         return true;
     }
 
@@ -81,6 +117,22 @@ internal sealed class HitInputEventInvoker
         return true;
     }
 
+    private object? CreateInputEventState()
+    {
+        if (settings.StateMode == StateMode.CapturedHumanState &&
+            lastCapturedInputEventState != null &&
+            lastCapturedInputEventStateType == inputEventStateType)
+        {
+            object? clone = CloneInputEventState(lastCapturedInputEventState);
+            if (clone != null)
+            {
+                return clone;
+            }
+        }
+
+        return CreateDefaultInputEventState();
+    }
+
     private object? CreateDefaultInputEventState()
     {
         if (inputEventStateType == null || !inputEventStateType.IsValueType)
@@ -89,6 +141,76 @@ internal sealed class HitInputEventInvoker
         }
 
         return Activator.CreateInstance(inputEventStateType);
+    }
+
+    private object? CloneInputEventState(object source)
+    {
+        if (inputEventStateType == null)
+        {
+            return null;
+        }
+
+        return CloneObject(inputEventStateType, source);
+    }
+
+    private static object? CloneObject(Type type, object source)
+    {
+        if (type.IsValueType)
+        {
+            return source;
+        }
+
+        object? clone;
+        try
+        {
+            clone = Activator.CreateInstance(type);
+        }
+        catch
+        {
+            return null;
+        }
+
+        if (clone == null)
+        {
+            return null;
+        }
+
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+        foreach (FieldInfo field in type.GetFields(flags))
+        {
+            if (field.IsInitOnly || field.IsLiteral)
+            {
+                continue;
+            }
+
+            try
+            {
+                field.SetValue(clone, field.GetValue(source));
+            }
+            catch
+            {
+                continue;
+            }
+        }
+
+        foreach (PropertyInfo property in type.GetProperties(flags))
+        {
+            if (!property.CanRead || !property.CanWrite || property.GetIndexParameters().Length != 0)
+            {
+                continue;
+            }
+
+            try
+            {
+                property.SetValue(clone, property.GetValue(source, null), null);
+            }
+            catch
+            {
+                continue;
+            }
+        }
+
+        return clone;
     }
 
     private void CorrectCurrentState(object controller, object? chosenPlanet, object? currFloor, object? nextFloor)
@@ -141,6 +263,30 @@ internal sealed class HitInputEventInvoker
             ReflectionCache.WriteMember(target, value, memberName);
             return;
         }
+    }
+
+    private static object? ReadChosenPlanet(object controller)
+    {
+        return ReflectionCache.ReadMember(controller, "chosenPlanet", "selectedPlanet");
+    }
+
+    private static object? ReadControllerCurrFloor(object controller)
+    {
+        return ReflectionCache.ReadMember(controller, "currFloor", "currentFloor");
+    }
+
+    private static object? ReadPlanetCurrFloor(object? chosenPlanet)
+    {
+        return chosenPlanet == null
+            ? null
+            : ReflectionCache.ReadMember(chosenPlanet, "currfloor", "currFloor", "currentFloor");
+    }
+
+    private static object? ReadNextFloor(object? floor)
+    {
+        return floor == null
+            ? null
+            : ReflectionCache.ReadMember(floor, "nextfloor", "nextFloor", "next");
     }
 
     private static int ReadFloorSeqId(object? floor)

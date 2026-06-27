@@ -28,7 +28,7 @@ public static class Main
 
         harmony = new Harmony(entry.Info.Id);
         InputPatches.Apply(harmony, Log, () => service);
-        LifecyclePatches.Apply(harmony, Log, () => service, () => settings);
+        LifecyclePatches.Apply(harmony, Log, () => service);
 
         entry.OnToggle = OnToggle;
         entry.OnGUI = OnGUI;
@@ -90,7 +90,6 @@ public static class Main
         settings.EnableInternalMacro = GUILayout.Toggle(settings.EnableInternalMacro, "EnableInternalMacro");
         settings.DryRun = GUILayout.Toggle(settings.DryRun, "DryRun");
         settings.StartFromCurrentFloor = GUILayout.Toggle(settings.StartFromCurrentFloor, "StartFromCurrentFloor");
-        settings.EnableFail2ActionStopPatch = GUILayout.Toggle(settings.EnableFail2ActionStopPatch, "EnableFail2ActionStopPatch");
 
         GUILayout.BeginHorizontal();
         GUILayout.Label("MacroOffsetMs", GUILayout.Width(140f));
@@ -112,6 +111,11 @@ public static class Main
         GUILayout.EndHorizontal();
 
         GUILayout.Label("HitInputEvent is the default Creplay-style path. DirectHit and InputPatch are fallback/experimental paths.");
+
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("StateMode", GUILayout.Width(140f));
+        settings.StateMode = (StateMode)GUILayout.Toolbar((int)settings.StateMode, new[] { "Default", "CapturedHumanState" }, GUILayout.Width(360f));
+        GUILayout.EndHorizontal();
 
         settings.DirectHitIgnoreInput = GUILayout.Toggle(settings.DirectHitIgnoreInput, "DirectHitIgnoreInput");
 

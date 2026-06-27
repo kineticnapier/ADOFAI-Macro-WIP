@@ -19,7 +19,7 @@ internal sealed class AudioClock
         this.log = log;
     }
 
-    public bool TryStart(ClockMode mode, out double clockSeconds)
+    public bool TryStart(ClockMode mode, out double clockSeconds, bool logReady = true)
     {
         clockSeconds = 0.0;
         ActiveMode = mode;
@@ -34,7 +34,11 @@ internal sealed class AudioClock
                 return false;
             }
 
-            LogClockReady(mode, clockSeconds);
+            if (logReady)
+            {
+                LogClockReady(mode, clockSeconds);
+            }
+
             return true;
         }
 
@@ -48,14 +52,22 @@ internal sealed class AudioClock
             }
 
             clockSeconds = ReadAudioSeconds();
-            LogClockReady(mode, clockSeconds);
+            if (logReady)
+            {
+                LogClockReady(mode, clockSeconds);
+            }
+
             return true;
         }
 
         baseClockSeconds = ReadBestAvailableSongSeconds();
         baseUnitySeconds = Time.unscaledTime;
         clockSeconds = baseClockSeconds;
-        LogClockReady(mode, clockSeconds);
+        if (logReady)
+        {
+            LogClockReady(mode, clockSeconds);
+        }
+
         return true;
     }
 

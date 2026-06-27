@@ -17,16 +17,12 @@ internal static class LifecyclePatches
     };
 
     private static Func<InternalMacroService?>? getService;
-    private static Func<InternalMacroSettings>? getSettings;
-
     public static void Apply(
         Harmony harmony,
         Action<string> log,
-        Func<InternalMacroService?> serviceAccessor,
-        Func<InternalMacroSettings> settingsAccessor)
+        Func<InternalMacroService?> serviceAccessor)
     {
         getService = serviceAccessor;
-        getSettings = settingsAccessor;
 
         PatchStartRewind(harmony, log);
         foreach (string methodName in StopMethodNames)
@@ -34,14 +30,7 @@ internal static class LifecyclePatches
             PatchStopMethod(harmony, log, methodName, nameof(StopSchedulerPrefix));
         }
 
-        if (getSettings().EnableFail2ActionStopPatch)
-        {
-            PatchStopMethod(harmony, log, "Fail2Action", nameof(Fail2ActionStopSchedulerPrefix));
-        }
-        else
-        {
-            log("Patch skipped: Fail2Action lifecycle stop is disabled.");
-        }
+        log("Patch skipped: Fail2Action lifecycle stop is disabled.");
     }
 
     private static void PatchStartRewind(Harmony harmony, Action<string> log)
@@ -106,13 +95,4 @@ internal static class LifecyclePatches
         getService?.Invoke()?.Stop($"stop patch: {__originalMethod.Name}");
     }
 
-    private static void Fail2ActionStopSchedulerPrefix(MethodBase __originalMethod)
-    {
-        if (getSettings?.Invoke().EnableFail2ActionStopPatch != true)
-        {
-            return;
-        }
-
-        getService?.Invoke()?.StopFromFail2Action(__originalMethod.Name);
-    }
 }
