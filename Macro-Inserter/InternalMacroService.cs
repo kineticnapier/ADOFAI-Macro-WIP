@@ -36,6 +36,13 @@ internal sealed class InternalMacroService
     private float lastPlayerControlTickLogTime = -10.0f;
     private float lastFireSkipLogTime = -10.0f;
     private bool firstInputPatchScheduled;
+    private int hitDiffSampleCount;
+    private double hitDiffTotalMs;
+    private double hitDiffMaxAbsMs;
+
+    public int HitDiffSampleCount => hitDiffSampleCount;
+    public double AverageHitDiffMs => hitDiffSampleCount == 0 ? 0.0 : hitDiffTotalMs / hitDiffSampleCount;
+    public double MaxAbsHitDiffMs => hitDiffMaxAbsMs;
 
     public InternalMacroService(InternalMacroSettings settings, Action<string> log)
     {
@@ -170,6 +177,7 @@ internal sealed class InternalMacroService
 
         armed = true;
         firstInputPatchScheduled = false;
+        ResetHitDiffStats();
         nextIndex = 0;
         MacroPlanEntry firstEntry = plan[0];
         log($"Scheduler armed. entries={plan.Count}, firstSeqID={firstEntry.SeqId}, firstTargetTime={firstEntry.TargetTimeSeconds:F6}s, clockMode={settings.ClockMode}, fireMode={settings.FireMode}, dryRun={settings.DryRun}");
@@ -443,6 +451,7 @@ internal sealed class InternalMacroService
                 LogHitResult(currentFloorSeqId, result);
                 if (result.ShouldConsume)
                 {
+                    RecordHitDiff(diffMs);
                     nextIndex++;
                     continue;
                 }
@@ -469,16 +478,11 @@ internal sealed class InternalMacroService
                 }
 
                 int beforeFloorSeqId = currentFloorSeqId;
-                bool accepted = directHitInvoker.Invoke(entry.SeqId, clockSeconds);
-                int afterFloorSeqId = TryReadCurrentFloorSeqId(out int afterDirectHitFloorSeqId)
-                    ? afterDirectHitFloorSeqId
-                    : -1;
-                bool immediateAdvanced = afterFloorSeqId > beforeFloorSeqId;
-                bool atOrPastTarget = afterFloorSeqId >= entry.SeqId;
-                bool shouldConsume = accepted && atOrPastTarget;
-                log($"Hit result currentFloor={currentFloorSeqId} targetSeqID={entry.SeqId} accepted={accepted} immediateAdvanced={immediateAdvanced} atOrPastTarget={atOrPastTarget} shouldConsume={shouldConsume} beforeFloor={beforeFloorSeqId} afterFloor={afterFloorSeqId}");
-                if (shouldConsume)
+                HitInvokeResult result = directHitInvoker.Invoke(entry.SeqId, clockSeconds, beforeFloorSeqId);
+                LogHitResult(currentFloorSeqId, result);
+                if (result.ShouldConsume)
                 {
+                    RecordHitDiff(diffMs);
                     nextIndex++;
                     continue;
                 }
@@ -525,6 +529,20 @@ internal sealed class InternalMacroService
     private void LogHitResult(int currentFloorSeqId, HitInvokeResult result)
     {
         log($"Hit result currentFloor={currentFloorSeqId} targetSeqID={result.TargetSeqId} accepted={result.Accepted} immediateAdvanced={result.ImmediateAdvanced} atOrPastTarget={result.AtOrPastTarget} shouldConsume={result.ShouldConsume} beforeFloor={result.BeforeFloorSeqId} afterFloor={result.AfterFloorSeqId}");
+    }
+
+    private void RecordHitDiff(double diffMs)
+    {
+        hitDiffSampleCount++;
+        hitDiffTotalMs += diffMs;
+        hitDiffMaxAbsMs = Math.Max(hitDiffMaxAbsMs, Math.Abs(diffMs));
+    }
+
+    private void ResetHitDiffStats()
+    {
+        hitDiffSampleCount = 0;
+        hitDiffTotalMs = 0.0;
+        hitDiffMaxAbsMs = 0.0;
     }
 
     private bool HandleHitFailedTooLate(MacroPlanEntry entry, double clockSeconds, double diffMs, string reason)

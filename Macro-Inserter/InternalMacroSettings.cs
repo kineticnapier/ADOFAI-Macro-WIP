@@ -10,7 +10,7 @@ public sealed class InternalMacroSettings : UnityModManager.ModSettings
     public bool StartFromCurrentFloor = false;
     public bool UseAudioTime = true;
     public ClockMode ClockMode = ClockMode.ConductorSongPosition;
-    public FireMode FireMode = FireMode.HitInputEvent;
+    public FireMode FireMode = FireMode.DirectHit;
     public FirstHitMode FirstHitMode = FirstHitMode.Manual;
     public StateMode StateMode = StateMode.Default;
     public FailureMode FailureMode = FailureMode.Stop;

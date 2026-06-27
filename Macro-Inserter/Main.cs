@@ -109,10 +109,10 @@ public static class Main
 
         GUILayout.BeginHorizontal();
         GUILayout.Label("FireMode", GUILayout.Width(140f));
-        settings.FireMode = (FireMode)GUILayout.Toolbar((int)settings.FireMode, new[] { "HitInputEvent", "DirectHit", "InputPatch" }, GUILayout.Width(360f));
+        settings.FireMode = (FireMode)GUILayout.Toolbar((int)settings.FireMode, new[] { "HitInputEvent(Debug)", "DirectHit", "InputPatch(Exp)" }, GUILayout.Width(480f));
         GUILayout.EndHorizontal();
 
-        GUILayout.Label("HitInputEvent is the default Creplay-style path. DirectHit and InputPatch are fallback/experimental paths.");
+        GUILayout.Label("DirectHit is the normal internal path. HitInputEvent is debug/experimental; InputPatch is experimental and not recommended.");
 
         GUILayout.BeginHorizontal();
         GUILayout.Label("FirstHitMode", GUILayout.Width(140f));
@@ -137,6 +137,11 @@ public static class Main
             settings.MaxLateRetryMs = Math.Max(0.0, maxLateRetryMs);
         }
         GUILayout.EndHorizontal();
+
+        if (service != null)
+        {
+            GUILayout.Label($"Hit diff avg={service.AverageHitDiffMs:F3}ms maxAbs={service.MaxAbsHitDiffMs:F3}ms samples={service.HitDiffSampleCount}");
+        }
 
         settings.DirectHitIgnoreInput = GUILayout.Toggle(settings.DirectHitIgnoreInput, "DirectHitIgnoreInput");
 
