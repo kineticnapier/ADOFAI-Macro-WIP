@@ -90,7 +90,6 @@ public static class Main
         settings.EnableInternalMacro = GUILayout.Toggle(settings.EnableInternalMacro, "EnableInternalMacro");
         settings.DryRun = GUILayout.Toggle(settings.DryRun, "DryRun");
         settings.StartFromCurrentFloor = GUILayout.Toggle(settings.StartFromCurrentFloor, "StartFromCurrentFloor");
-        settings.UseAudioTime = GUILayout.Toggle(settings.UseAudioTime, "UseAudioTime");
 
         GUILayout.BeginHorizontal();
         GUILayout.Label("MacroOffsetMs", GUILayout.Width(140f));
@@ -99,6 +98,11 @@ public static class Main
         {
             settings.MacroOffsetMs = offset;
         }
+        GUILayout.EndHorizontal();
+
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("ClockMode", GUILayout.Width(140f));
+        settings.ClockMode = (ClockMode)GUILayout.Toolbar((int)settings.ClockMode, new[] { "Conductor", "AudioSource", "Unscaled" }, GUILayout.Width(360f));
         GUILayout.EndHorizontal();
 
         GUILayout.BeginHorizontal();

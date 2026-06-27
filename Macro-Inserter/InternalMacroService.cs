@@ -20,6 +20,7 @@ internal sealed class InternalMacroService
     private int nextIndex;
     private bool running;
     private FireMode runningFireMode;
+    private ClockMode runningClockMode;
     private float lastStartFailureLogTime = -10.0f;
     private string? lastStartFailureReason;
 
@@ -116,6 +117,13 @@ internal sealed class InternalMacroService
             return false;
         }
 
+        if (runningClockMode != settings.ClockMode)
+        {
+            log("ClockMode changed. Stopping internal macro scheduler; it will start again after Start_Rewind.");
+            Stop();
+            return false;
+        }
+
         return true;
     }
 
@@ -143,23 +151,24 @@ internal sealed class InternalMacroService
             return false;
         }
 
-        if (!audioClock.TryStart(settings.UseAudioTime, out double audioSeconds))
+        if (!audioClock.TryStart(settings.ClockMode, out double clockSeconds))
         {
             plan = Array.Empty<MacroPlanEntry>();
             return false;
         }
 
-        nextIndex = ResolveStartIndex(audioSeconds);
+        nextIndex = ResolveStartIndex(clockSeconds);
         if (nextIndex >= plan.Count)
         {
-            log($"Internal macro plan has no remaining entries. entries={plan.Count}, audioTime={audioSeconds:F6}s");
+            log($"Internal macro plan has no remaining entries. entries={plan.Count}, clockTime={clockSeconds:F6}s, mode={settings.ClockMode}");
             return false;
         }
 
         running = true;
         runningFireMode = settings.FireMode;
+        runningClockMode = settings.ClockMode;
         MacroPlanEntry firstEntry = plan[nextIndex];
-        log($"Internal macro scheduler started. entries={plan.Count}, startIndex={nextIndex}, firstSeqID={firstEntry.SeqId}, firstTargetTime={firstEntry.TargetTimeSeconds:F6}s, audioTime={audioSeconds:F6}s, fireMode={settings.FireMode}, dryRun={settings.DryRun}");
+        log($"Scheduler started. entries={plan.Count}, startIndex={nextIndex}, firstSeqID={firstEntry.SeqId}, firstTargetTime={firstEntry.TargetTimeSeconds:F6}s, clockTime={clockSeconds:F6}s, clockMode={settings.ClockMode}, fireMode={settings.FireMode}, dryRun={settings.DryRun}");
         return true;
     }
 
@@ -224,8 +233,9 @@ internal sealed class InternalMacroService
 
     private void FireDueInputs(bool allowDirectHit, bool allowInputPatch)
     {
-        if (!audioClock.TryGetSeconds(settings.UseAudioTime, out double audioSeconds))
+        if (!audioClock.TryGetSeconds(settings.ClockMode, out double clockSeconds))
         {
+            log($"waiting for clock: mode={settings.ClockMode}");
             Stop();
             return;
         }
@@ -245,7 +255,7 @@ internal sealed class InternalMacroService
 
         List<MacroPlanEntry> due = new();
         while (nextIndex < plan.Count &&
-               plan[nextIndex].TargetTimeSeconds <= audioSeconds &&
+               plan[nextIndex].TargetTimeSeconds <= clockSeconds &&
                plan[nextIndex].SeqId <= currentFloorSeqId)
         {
             due.Add(plan[nextIndex]);
@@ -259,10 +269,11 @@ internal sealed class InternalMacroService
 
         foreach (MacroPlanEntry entry in due)
         {
-            double diffMs = (audioSeconds - entry.TargetTimeSeconds) * 1000.0;
+            double diffMs = (clockSeconds - entry.TargetTimeSeconds) * 1000.0;
+            log($"Fire attempt: seqID={entry.SeqId} targetTime={entry.TargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s diffMs={diffMs:F3} currFloor={currentFloorSeqId} mode={settings.ClockMode} fireMode={settings.FireMode}");
             if (settings.DryRun)
             {
-                log($"DryRun targetTime={entry.TargetTimeSeconds:F6}s audioTime={audioSeconds:F6}s diffMs={diffMs:F3} seqID={entry.SeqId} currFloorSeqID={currentFloorSeqId}");
+                log($"DryRun targetTime={entry.TargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s diffMs={diffMs:F3} seqID={entry.SeqId} currFloorSeqID={currentFloorSeqId} clockMode={settings.ClockMode}");
             }
         }
 
@@ -280,7 +291,12 @@ internal sealed class InternalMacroService
 
             foreach (MacroPlanEntry entry in due)
             {
-                hitInputEventInvoker.Invoke(entry.SeqId, audioSeconds);
+                bool accepted = hitInputEventInvoker.Invoke(entry.SeqId, clockSeconds);
+                log($"HitInputEvent result={accepted} seqID={entry.SeqId} clockTime={clockSeconds:F6}s");
+                if (!accepted)
+                {
+                    log("HitInputEvent returned false");
+                }
             }
         }
         else if (settings.FireMode == FireMode.DirectHit)
@@ -292,7 +308,7 @@ internal sealed class InternalMacroService
 
             foreach (MacroPlanEntry entry in due)
             {
-                directHitInvoker.Invoke(entry.SeqId, audioSeconds);
+                directHitInvoker.Invoke(entry.SeqId, clockSeconds);
             }
         }
         else
@@ -305,7 +321,7 @@ internal sealed class InternalMacroService
             int virtualInputCount = Math.Max(1, settings.VirtualInputKeyCount);
             InputPatchState.BeginFrame(due.Count * virtualInputCount);
             string seqIds = string.Join(",", due.Select(entry => entry.SeqId.ToString()).ToArray());
-            log($"InputPatch scheduled count={due.Count} virtualKey={settings.VirtualInputKey} virtualKeyCount={virtualInputCount} audioTime={audioSeconds:F6}s currFloorSeqID={currentFloorSeqId} seqID={seqIds}");
+            log($"InputPatch scheduled count={due.Count} virtualKey={settings.VirtualInputKey} virtualKeyCount={virtualInputCount} clockTime={clockSeconds:F6}s currFloorSeqID={currentFloorSeqId} seqID={seqIds}");
         }
     }
 
