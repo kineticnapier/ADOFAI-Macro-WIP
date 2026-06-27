@@ -18,11 +18,13 @@ internal sealed class DirectHitInvoker
     public void Warmup()
     {
         ReflectionCache.GetSingletonInstance("scrController");
+        ReflectionCache.GetSingletonInstance("scrConductor");
         hitMethod ??= ReflectionCache.FindMethod("scrController", "Hit", typeof(bool));
         ReflectionCache.WarmupMembers("scrController", "currFloor", "currentFloor", "floor", "seqID", "currentFloorSeqID");
+        ReflectionCache.WarmupMembers("scrConductor", "songposition", "songposition_minusi");
     }
 
-    public HitInvokeResult Invoke(int seqId, double audioTime, int beforeFloorSeqId)
+    public HitInvokeResult Invoke(int seqId, double audioTime, int beforeFloorSeqId, double targetTimeSeconds)
     {
         object? controller = ReflectionCache.GetSingletonInstance("scrController");
         if (controller == null)
@@ -39,8 +41,10 @@ internal sealed class DirectHitInvoker
         }
 
         object? result;
+        TimeSpoofState? timeSpoofState = null;
         try
         {
+            timeSpoofState = BeginTimeSpoof(targetTimeSeconds);
             result = hitMethod.Invoke(controller, new object[] { settings.DirectHitIgnoreInput });
         }
         catch (Exception ex)
@@ -48,6 +52,10 @@ internal sealed class DirectHitInvoker
             LogInvalidFloorIfNeeded(seqId, audioTime);
             LogNormal($"DirectHit threw {ex.GetType().Name}. seqID={seqId} audioTime={audioTime:F6}s.");
             return CreateResult(false, beforeFloorSeqId, ReadCurrentFloorSeqIdIfNeeded(), seqId);
+        }
+        finally
+        {
+            timeSpoofState?.Restore();
         }
 
         if (result is bool accepted)
@@ -75,6 +83,48 @@ internal sealed class DirectHitInvoker
         }
 
         return CreateResult(false, beforeFloorSeqId, ReadCurrentFloorSeqIdIfNeeded(), seqId);
+    }
+
+    private TimeSpoofState? BeginTimeSpoof(double targetTimeSeconds)
+    {
+        if (!settings.ExperimentalTimeSpoofForDirectHit)
+        {
+            return null;
+        }
+
+        try
+        {
+            object? conductor = ReflectionCache.GetSingletonInstance("scrConductor");
+            if (conductor == null)
+            {
+                LogNormal("timeSpoof failed: scrConductor.instance was not found.");
+                return null;
+            }
+
+            object? oldSongPosition = ReflectionCache.ReadMember(conductor, "songposition");
+            object? oldSongPositionMinusI = ReflectionCache.ReadMember(conductor, "songposition_minusi");
+            bool wroteSongPosition = ReflectionCache.WriteMember(conductor, targetTimeSeconds, "songposition");
+            bool wroteSongPositionMinusI = ReflectionCache.WriteMember(conductor, targetTimeSeconds, "songposition_minusi");
+            if (!wroteSongPosition && !wroteSongPositionMinusI)
+            {
+                LogNormal("timeSpoof failed: conductor songposition fields were not writable.");
+                return null;
+            }
+
+            LogVerbose($"timeSpoof enabled targetTime={targetTimeSeconds:F6}s wroteSongposition={wroteSongPosition} wroteSongpositionMinusI={wroteSongPositionMinusI}");
+            return new TimeSpoofState(
+                conductor,
+                oldSongPosition,
+                oldSongPositionMinusI,
+                wroteSongPosition,
+                wroteSongPositionMinusI,
+                message => LogVerbose(message));
+        }
+        catch (Exception ex)
+        {
+            LogNormal($"timeSpoof failed: {ex.GetType().Name}.");
+            return null;
+        }
     }
 
     private void LogInvalidFloorIfNeeded(int seqId, double audioTime)
@@ -144,6 +194,44 @@ internal sealed class DirectHitInvoker
         if (settings.LoggingMode == LoggingMode.Verbose)
         {
             log(message);
+        }
+    }
+
+    private sealed class TimeSpoofState
+    {
+        private readonly object conductor;
+        private readonly object? oldSongPosition;
+        private readonly object? oldSongPositionMinusI;
+        private readonly bool restoreSongPosition;
+        private readonly bool restoreSongPositionMinusI;
+        private readonly Action<string> logVerbose;
+
+        public TimeSpoofState(
+            object conductor,
+            object? oldSongPosition,
+            object? oldSongPositionMinusI,
+            bool restoreSongPosition,
+            bool restoreSongPositionMinusI,
+            Action<string> logVerbose)
+        {
+            this.conductor = conductor;
+            this.oldSongPosition = oldSongPosition;
+            this.oldSongPositionMinusI = oldSongPositionMinusI;
+            this.restoreSongPosition = restoreSongPosition;
+            this.restoreSongPositionMinusI = restoreSongPositionMinusI;
+            this.logVerbose = logVerbose;
+        }
+
+        public void Restore()
+        {
+            bool restoredSongPosition = !restoreSongPosition ||
+                                        ReflectionCache.WriteMember(conductor, oldSongPosition, "songposition");
+            bool restoredSongPositionMinusI = !restoreSongPositionMinusI ||
+                                              ReflectionCache.WriteMember(conductor, oldSongPositionMinusI, "songposition_minusi");
+            if (!restoredSongPosition || !restoredSongPositionMinusI)
+            {
+                logVerbose($"timeSpoof failed to restore fully. restoredSongposition={restoredSongPosition} restoredSongpositionMinusI={restoredSongPositionMinusI}");
+            }
         }
     }
 }

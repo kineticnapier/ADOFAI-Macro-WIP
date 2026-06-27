@@ -20,6 +20,8 @@ internal sealed class InternalMacroService
     private const float DuplicateStartRewindWindowSeconds = 0.5f;
     private const double RestartClockResetSeconds = 0.2;
     private const double RestartClockBackstepSeconds = 0.5;
+    private const int DueBacklogFailureMultiplier = 4;
+    private const int MinDueBacklogFailureThreshold = 16;
 
     private readonly InternalMacroSettings settings;
     private readonly Action<string> log;
@@ -613,6 +615,19 @@ internal sealed class InternalMacroService
 
         LogVerbose($"FireDueInputs nextIndex={nextIndex} nextSeqID={nextSeqId} nextTargetTime={nextTargetTime} clockTime={clockSeconds:F6}s dueCount={dueCount}");
 
+        int maxHitsThisUpdate = GetMaxHitsPerPlayerControlUpdate();
+        int hitsThisUpdate = 0;
+        if (settings.FireMode == FireMode.DirectHit &&
+            HandleDueCountTooLarge(dueCount, maxHitsThisUpdate, clockSeconds))
+        {
+            if (!running)
+            {
+                return;
+            }
+
+            dueCount = CountDueEntries(clockSeconds);
+        }
+
         while (nextIndex < plan.Count)
         {
             MacroPlanEntry entry = plan[nextIndex];
@@ -684,6 +699,22 @@ internal sealed class InternalMacroService
                 break;
             }
 
+            if (diffMs > settings.MaxLateRetryMs)
+            {
+                suppressNextAdaptiveCorrection = true;
+                if (HandleHitFailedTooLate(entry, clockSeconds, diffMs, "entry too late before hit"))
+                {
+                    if (!running)
+                    {
+                        return;
+                    }
+
+                    continue;
+                }
+
+                break;
+            }
+
             LogVerbose($"Fire attempt: seqID={entry.SeqId} targetTime={effectiveTargetTimeSeconds:F6}s baseTargetTime={entry.TargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s diffMs={diffMs:F3} currentFloor={currentFloorSeqId} mode={settings.ClockMode} fireMode={settings.FireMode} adaptiveOffsetMs={adaptiveOffsetMs:F3}");
 
             if (settings.DryRun)
@@ -732,7 +763,7 @@ internal sealed class InternalMacroService
                 }
 
                 int beforeFloorSeqId = currentFloorSeqId;
-                HitInvokeResult result = directHitInvoker.Invoke(entry.SeqId, clockSeconds, beforeFloorSeqId);
+                HitInvokeResult result = directHitInvoker.Invoke(entry.SeqId, clockSeconds, beforeFloorSeqId, effectiveTargetTimeSeconds);
                 LogHitResult(currentFloorSeqId, result);
                 bool shouldConsumeDirectHit = entry.IsMidspin
                     ? result.Accepted
@@ -742,7 +773,19 @@ internal sealed class InternalMacroService
                     RecordHitDiff(diffMs);
                     UpdateAdaptiveOffsetAfterDirectHit(diffMs, dueCount, entry);
                     nextIndex++;
-                    break;
+                    hitsThisUpdate++;
+                    if (!settings.EnableHighDensityMode)
+                    {
+                        break;
+                    }
+
+                    if (hitsThisUpdate >= maxHitsThisUpdate)
+                    {
+                        LogVerbose($"highDensity maxHitsReached hitsThisUpdate={hitsThisUpdate} maxHitsPerUpdate={maxHitsThisUpdate} nextIndex={nextIndex} dueCount={dueCount}");
+                        break;
+                    }
+
+                    continue;
                 }
 
                 LogNormal($"Hit failed; keeping nextIndex={nextIndex} seqID={entry.SeqId}");
@@ -771,6 +814,44 @@ internal sealed class InternalMacroService
             nextIndex++;
             break;
         }
+
+        if (settings.FireMode == FireMode.DirectHit &&
+            settings.EnableHighDensityMode &&
+            hitsThisUpdate > 0)
+        {
+            LogVerbose($"highDensity hitsThisUpdate={hitsThisUpdate} maxHitsPerUpdate={maxHitsThisUpdate} dueCount={dueCount} nextIndex={nextIndex}");
+        }
+    }
+
+    private int GetMaxHitsPerPlayerControlUpdate()
+    {
+        return settings.EnableHighDensityMode
+            ? Math.Max(1, settings.MaxHitsPerPlayerControlUpdate)
+            : 1;
+    }
+
+    private bool HandleDueCountTooLarge(int dueCount, int maxHitsThisUpdate, double clockSeconds)
+    {
+        int threshold = Math.Max(
+            MinDueBacklogFailureThreshold,
+            Math.Max(1, maxHitsThisUpdate) * DueBacklogFailureMultiplier);
+        if (dueCount <= threshold)
+        {
+            return false;
+        }
+
+        suppressNextAdaptiveCorrection = true;
+        if (settings.FailureMode == FailureMode.Skip)
+        {
+            int skipCount = Math.Min(dueCount - threshold, plan.Count - nextIndex);
+            log($"dueCount too large; skipping backlog. dueCount={dueCount} threshold={threshold} skipCount={skipCount} maxHitsPerUpdate={maxHitsThisUpdate} clockTime={clockSeconds:F6}s");
+            nextIndex += skipCount;
+            return true;
+        }
+
+        log($"dueCount too large; stopping. dueCount={dueCount} threshold={threshold} maxHitsPerUpdate={maxHitsThisUpdate} clockTime={clockSeconds:F6}s");
+        Stop("due count too large");
+        return true;
     }
 
     private int CountDueEntries(double clockSeconds)
@@ -884,12 +965,12 @@ internal sealed class InternalMacroService
         suppressNextAdaptiveCorrection = true;
         if (settings.FailureMode == FailureMode.Skip)
         {
-            log($"Hit failed too late; skipping. reason={reason} seqID={entry.SeqId} targetTime={entry.TargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s diffMs={diffMs:F3} maxLateRetryMs={settings.MaxLateRetryMs:F3}");
+            log($"tooLateSkipped: reason={reason} seqID={entry.SeqId} targetTime={entry.TargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s diffMs={diffMs:F3} maxLateRetryMs={settings.MaxLateRetryMs:F3}");
             nextIndex++;
             return true;
         }
 
-        log($"Hit failed too late; stopping. reason={reason} seqID={entry.SeqId} targetTime={entry.TargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s diffMs={diffMs:F3} maxLateRetryMs={settings.MaxLateRetryMs:F3}");
+        log($"tooLateStopped: reason={reason} seqID={entry.SeqId} targetTime={entry.TargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s diffMs={diffMs:F3} maxLateRetryMs={settings.MaxLateRetryMs:F3}");
         Stop("hit failed too late");
         return true;
     }

@@ -13,7 +13,8 @@ public static class Main
     private static Harmony? harmony;
     private static UnityModManager.ModEntry? modEntry;
     private static string macroOffsetText = "0";
-    private static string maxLateRetryMsText = "250";
+    private static string maxLateRetryMsText = "40";
+    private static string maxHitsPerPlayerControlUpdateText = "8";
     private static string virtualInputKeyCountText = "1";
     private static bool enabled;
     private static float lastOnUpdateExceptionLogTime = -10.0f;
@@ -26,6 +27,7 @@ public static class Main
         settings = UnityModManager.ModSettings.Load<InternalMacroSettings>(entry);
         macroOffsetText = settings.MacroOffsetMs.ToString(CultureInfo.InvariantCulture);
         maxLateRetryMsText = settings.MaxLateRetryMs.ToString(CultureInfo.InvariantCulture);
+        maxHitsPerPlayerControlUpdateText = settings.MaxHitsPerPlayerControlUpdate.ToString(CultureInfo.InvariantCulture);
         virtualInputKeyCountText = settings.VirtualInputKeyCount.ToString(CultureInfo.InvariantCulture);
         service = new InternalMacroService(settings, Log);
 
@@ -143,6 +145,19 @@ public static class Main
             settings.MaxLateRetryMs = Math.Max(0.0, maxLateRetryMs);
         }
         GUILayout.EndHorizontal();
+
+        settings.EnableHighDensityMode = GUILayout.Toggle(settings.EnableHighDensityMode, "EnableHighDensityMode");
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("MaxHits/Update", GUILayout.Width(140f));
+        maxHitsPerPlayerControlUpdateText = GUILayout.TextField(maxHitsPerPlayerControlUpdateText, GUILayout.Width(120f));
+        if (int.TryParse(maxHitsPerPlayerControlUpdateText, NumberStyles.Integer, CultureInfo.InvariantCulture, out int maxHitsPerUpdate))
+        {
+            settings.MaxHitsPerPlayerControlUpdate = Math.Max(1, maxHitsPerUpdate);
+        }
+        GUILayout.EndHorizontal();
+
+        settings.ExperimentalTimeSpoofForDirectHit = GUILayout.Toggle(settings.ExperimentalTimeSpoofForDirectHit, "ExperimentalTimeSpoofForDirectHit");
+        GUILayout.Label("TimeSpoof temporarily writes conductor songposition during DirectHit. Experimental; leave off unless testing ultra-high density.");
 
         if (service != null)
         {

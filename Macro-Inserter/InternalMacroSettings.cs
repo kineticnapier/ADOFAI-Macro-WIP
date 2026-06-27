@@ -15,7 +15,10 @@ public sealed class InternalMacroSettings : UnityModManager.ModSettings
     public StateMode StateMode = StateMode.Default;
     public LoggingMode LoggingMode = LoggingMode.Minimal;
     public FailureMode FailureMode = FailureMode.Stop;
-    public double MaxLateRetryMs = 250.0;
+    public double MaxLateRetryMs = 40.0;
+    public bool EnableHighDensityMode = false;
+    public int MaxHitsPerPlayerControlUpdate = 8;
+    public bool ExperimentalTimeSpoofForDirectHit = false;
     public bool EnableAdaptiveOffset = false;
     public bool ValidateAfterHit = false;
     public bool DirectHitIgnoreInput = true;
