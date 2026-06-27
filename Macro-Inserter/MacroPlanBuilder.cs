@@ -8,6 +8,9 @@ namespace Macro_Inserter;
 internal sealed class MacroPlanBuilder
 {
     private const double DuplicateTargetTimeThresholdSeconds = 0.001;
+    private const double SpeedChangeRatioThreshold = 4.0;
+    private const double UltraFastIntervalMs = 5.0;
+    private const double FastIntervalMs = 30.0;
 
     private readonly Action<string> log;
 
@@ -93,7 +96,7 @@ internal sealed class MacroPlanBuilder
             previous = filteredEntry;
         }
 
-        MacroPlanEntry[] plan = filteredEntries.ToArray();
+        MacroPlanEntry[] plan = MarkSpeedChanges(filteredEntries);
 
         if (plan.Length == 0)
         {
@@ -113,6 +116,83 @@ internal sealed class MacroPlanBuilder
         }
 
         return new MacroPlanBuildResult(plan, failureReason: null, detectedMidspinCount, skippedDuplicateTimeCount);
+    }
+
+    private static MacroPlanEntry[] MarkSpeedChanges(IReadOnlyList<MacroPlanEntry> entries)
+    {
+        if (entries.Count == 0)
+        {
+            return Array.Empty<MacroPlanEntry>();
+        }
+
+        bool[] nearSpeedChange = new bool[entries.Count];
+        for (int i = 1; i < entries.Count - 1; i++)
+        {
+            double prevInterval = entries[i].TargetTimeSeconds - entries[i - 1].TargetTimeSeconds;
+            double nextInterval = entries[i + 1].TargetTimeSeconds - entries[i].TargetTimeSeconds;
+            if (prevInterval <= 0.0 || nextInterval <= 0.0)
+            {
+                continue;
+            }
+
+            double ratio = nextInterval / prevInterval;
+            if (ratio > SpeedChangeRatioThreshold ||
+                ratio < 1.0 / SpeedChangeRatioThreshold)
+            {
+                nearSpeedChange[i - 1] = true;
+                nearSpeedChange[i] = true;
+                nearSpeedChange[i + 1] = true;
+            }
+        }
+
+        MacroPlanEntry[] marked = new MacroPlanEntry[entries.Count];
+        for (int i = 0; i < entries.Count; i++)
+        {
+            double intervalSeconds = GetRepresentativeIntervalSeconds(entries, i);
+            SpeedBand speedBand = ClassifySpeedBand(intervalSeconds * 1000.0);
+            MacroPlanEntry entry = entries[i];
+            marked[i] = new MacroPlanEntry(
+                entry.SeqId,
+                entry.TargetTimeSeconds,
+                entry.IsMidspin,
+                entry.IsNearMidspin,
+                nearSpeedChange[i],
+                speedBand);
+        }
+
+        return marked;
+    }
+
+    private static double GetRepresentativeIntervalSeconds(IReadOnlyList<MacroPlanEntry> entries, int index)
+    {
+        if (entries.Count <= 1)
+        {
+            return double.PositiveInfinity;
+        }
+
+        if (index > 0)
+        {
+            double previousInterval = entries[index].TargetTimeSeconds - entries[index - 1].TargetTimeSeconds;
+            if (previousInterval > 0.0)
+            {
+                return previousInterval;
+            }
+        }
+
+        double nextInterval = entries[index + 1].TargetTimeSeconds - entries[index].TargetTimeSeconds;
+        return nextInterval > 0.0 ? nextInterval : double.PositiveInfinity;
+    }
+
+    private static SpeedBand ClassifySpeedBand(double intervalMs)
+    {
+        if (intervalMs < UltraFastIntervalMs)
+        {
+            return SpeedBand.UltraFast;
+        }
+
+        return intervalMs < FastIntervalMs
+            ? SpeedBand.Fast
+            : SpeedBand.Normal;
     }
 
     private static string CombineFailureReasons(params string?[] reasons)

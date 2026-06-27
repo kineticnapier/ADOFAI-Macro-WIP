@@ -6,12 +6,16 @@ internal sealed class MacroPlanEntry
         int seqId,
         double targetTimeSeconds,
         bool isMidspin = false,
-        bool isNearMidspin = false)
+        bool isNearMidspin = false,
+        bool isNearSpeedChange = false,
+        SpeedBand speedBand = SpeedBand.Normal)
     {
         SeqId = seqId;
         TargetTimeSeconds = targetTimeSeconds;
         IsMidspin = isMidspin;
         IsNearMidspin = isNearMidspin;
+        IsNearSpeedChange = isNearSpeedChange;
+        SpeedBand = speedBand;
     }
 
     public int SeqId { get; }
@@ -21,4 +25,8 @@ internal sealed class MacroPlanEntry
     public bool IsMidspin { get; }
 
     public bool IsNearMidspin { get; }
+
+    public bool IsNearSpeedChange { get; }
+
+    public SpeedBand SpeedBand { get; }
 }

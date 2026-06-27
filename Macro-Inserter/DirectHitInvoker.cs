@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq.Expressions;
 using System.Reflection;
 
 namespace Macro_Inserter;
@@ -7,7 +9,14 @@ internal sealed class DirectHitInvoker
 {
     private readonly InternalMacroSettings settings;
     private readonly Action<string> log;
+    private readonly object[] hitInvokeArgs = new object[1];
+    private readonly Dictionary<Type, Func<object, int>?> floorSeqIdGetters = new();
+    private object? controllerInstance;
+    private object? conductorInstance;
     private MethodInfo? hitMethod;
+    private Func<object, bool, bool>? hitDelegate;
+    private Func<object, object?>? controllerCurrFloorGetter;
+    private Func<object, int>? controllerFloorSeqIdGetter;
 
     public DirectHitInvoker(InternalMacroSettings settings, Action<string> log)
     {
@@ -17,23 +26,48 @@ internal sealed class DirectHitInvoker
 
     public void Warmup()
     {
-        ReflectionCache.GetSingletonInstance("scrController");
-        ReflectionCache.GetSingletonInstance("scrConductor");
-        hitMethod ??= ReflectionCache.FindMethod("scrController", "Hit", typeof(bool));
+        PrepareForRun();
         ReflectionCache.WarmupMembers("scrController", "currFloor", "currentFloor", "floor", "seqID", "currentFloorSeqID");
         ReflectionCache.WarmupMembers("scrConductor", "songposition", "songposition_minusi");
     }
 
+    public bool PrepareForRun()
+    {
+        controllerInstance = ReflectionCache.GetSingletonInstance("scrController");
+        conductorInstance = ReflectionCache.GetSingletonInstance("scrConductor");
+        hitMethod ??= ReflectionCache.FindMethod("scrController", "Hit", typeof(bool));
+        if (hitMethod != null && hitDelegate == null)
+        {
+            hitDelegate = TryBuildHitDelegate(hitMethod);
+        }
+
+        if (controllerInstance != null)
+        {
+            BuildControllerFloorGetters(controllerInstance.GetType());
+        }
+
+        return controllerInstance != null && hitMethod != null;
+    }
+
+    public bool CanUseFastPath()
+    {
+        if (controllerInstance == null || hitDelegate == null)
+        {
+            PrepareForRun();
+        }
+
+        return controllerInstance != null && hitDelegate != null;
+    }
+
     public HitInvokeResult Invoke(int seqId, double audioTime, int beforeFloorSeqId, double targetTimeSeconds)
     {
-        object? controller = ReflectionCache.GetSingletonInstance("scrController");
+        object? controller = controllerInstance ?? RefreshControllerInstance();
         if (controller == null)
         {
             LogNormal("scrController.instance was not found for DirectHit.");
             return CreateResult(false, beforeFloorSeqId, -1, seqId);
         }
 
-        hitMethod ??= ReflectionCache.FindMethod("scrController", "Hit", typeof(bool));
         if (hitMethod == null)
         {
             LogNormal("scrController.Hit(bool) was not found.");
@@ -45,7 +79,7 @@ internal sealed class DirectHitInvoker
         try
         {
             timeSpoofState = BeginTimeSpoof(targetTimeSeconds);
-            result = hitMethod.Invoke(controller, new object[] { settings.DirectHitIgnoreInput });
+            result = InvokeHit(controller);
         }
         catch (Exception ex)
         {
@@ -85,6 +119,108 @@ internal sealed class DirectHitInvoker
         return CreateResult(false, beforeFloorSeqId, ReadCurrentFloorSeqIdIfNeeded(), seqId);
     }
 
+    public bool TryInvokeFast(double targetTimeSeconds, out bool accepted)
+    {
+        accepted = false;
+        object? controller = controllerInstance;
+        if (controller == null || hitDelegate == null)
+        {
+            if (!PrepareForRun())
+            {
+                return false;
+            }
+
+            controller = controllerInstance;
+            if (controller == null || hitDelegate == null)
+            {
+                return false;
+            }
+        }
+
+        TimeSpoofState? timeSpoofState = null;
+        try
+        {
+            timeSpoofState = BeginTimeSpoof(targetTimeSeconds);
+            accepted = hitDelegate(controller, settings.DirectHitIgnoreInput);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+        finally
+        {
+            timeSpoofState?.Restore();
+        }
+    }
+
+    public bool TryReadCurrentFloorSeqId(out int seqId)
+    {
+        seqId = 0;
+        object? controller = controllerInstance ?? RefreshControllerInstance();
+        if (controller == null)
+        {
+            return false;
+        }
+
+        try
+        {
+            object? currFloor = controllerCurrFloorGetter?.Invoke(controller);
+            if (currFloor != null)
+            {
+                if (currFloor is int intValue)
+                {
+                    seqId = intValue;
+                    return true;
+                }
+
+                if (TryReadFloorSeqId(currFloor, out seqId))
+                {
+                    return true;
+                }
+            }
+
+            if (controllerFloorSeqIdGetter != null)
+            {
+                seqId = controllerFloorSeqIdGetter(controller);
+                return true;
+            }
+        }
+        catch
+        {
+            return false;
+        }
+
+        return false;
+    }
+
+    private object? RefreshControllerInstance()
+    {
+        controllerInstance = ReflectionCache.GetSingletonInstance("scrController");
+        if (controllerInstance != null)
+        {
+            BuildControllerFloorGetters(controllerInstance.GetType());
+        }
+
+        return controllerInstance;
+    }
+
+    private object? InvokeHit(object controller)
+    {
+        if (hitDelegate != null)
+        {
+            return hitDelegate(controller, settings.DirectHitIgnoreInput);
+        }
+
+        if (hitMethod == null)
+        {
+            return false;
+        }
+
+        hitInvokeArgs[0] = settings.DirectHitIgnoreInput;
+        return hitMethod.Invoke(controller, hitInvokeArgs);
+    }
+
     private TimeSpoofState? BeginTimeSpoof(double targetTimeSeconds)
     {
         if (!settings.ExperimentalTimeSpoofForDirectHit)
@@ -94,13 +230,14 @@ internal sealed class DirectHitInvoker
 
         try
         {
-            object? conductor = ReflectionCache.GetSingletonInstance("scrConductor");
+            object? conductor = conductorInstance ?? ReflectionCache.GetSingletonInstance("scrConductor");
             if (conductor == null)
             {
                 LogNormal("timeSpoof failed: scrConductor.instance was not found.");
                 return null;
             }
 
+            conductorInstance = conductor;
             object? oldSongPosition = ReflectionCache.ReadMember(conductor, "songposition");
             object? oldSongPositionMinusI = ReflectionCache.ReadMember(conductor, "songposition_minusi");
             bool wroteSongPosition = ReflectionCache.WriteMember(conductor, targetTimeSeconds, "songposition");
@@ -155,30 +292,172 @@ internal sealed class DirectHitInvoker
         return settings.ValidateAfterHit ? ReadCurrentFloorSeqId() : -1;
     }
 
-    private static int ReadCurrentFloorSeqId()
+    private int ReadCurrentFloorSeqId()
     {
-        object? controller = ReflectionCache.GetSingletonInstance("scrController");
-        if (controller == null)
+        return TryReadCurrentFloorSeqId(out int seqId) ? seqId : -1;
+    }
+
+    private void BuildControllerFloorGetters(Type controllerType)
+    {
+        controllerCurrFloorGetter ??= TryBuildObjectGetter(controllerType, "currFloor", "currentFloor");
+        controllerFloorSeqIdGetter ??= TryBuildIntGetter(controllerType, "floor", "seqID", "currentFloorSeqID");
+    }
+
+    private bool TryReadFloorSeqId(object floor, out int seqId)
+    {
+        seqId = 0;
+        Type type = floor.GetType();
+        if (!floorSeqIdGetters.TryGetValue(type, out Func<object, int>? getter))
         {
-            return -1;
+            getter = TryBuildIntGetter(type, "seqID", "seqId", "floorSeqID");
+            floorSeqIdGetters[type] = getter;
         }
 
-        object? currFloor = ReflectionCache.ReadMember(controller, "currFloor", "currentFloor");
-        if (currFloor == null)
+        if (getter == null)
         {
-            return ReflectionCache.TryReadInt(controller, out int controllerSeqId, "floor", "seqID", "currentFloorSeqID")
-                ? controllerSeqId
-                : -1;
+            return false;
         }
 
-        if (currFloor is int intValue)
+        seqId = getter(floor);
+        return true;
+    }
+
+    private static Func<object, bool, bool>? TryBuildHitDelegate(MethodInfo method)
+    {
+        if (method.ReturnType != typeof(bool))
         {
-            return intValue;
+            return null;
         }
 
-        return ReflectionCache.TryReadInt(currFloor, out int seqId, "seqID", "seqId", "floorSeqID")
-            ? seqId
-            : -1;
+        try
+        {
+            ParameterExpression targetParameter = Expression.Parameter(typeof(object), "target");
+            ParameterExpression ignoreInputParameter = Expression.Parameter(typeof(bool), "ignoreInput");
+            Expression instance = method.IsStatic
+                ? null!
+                : Expression.Convert(targetParameter, method.DeclaringType!);
+            MethodCallExpression call = method.IsStatic
+                ? Expression.Call(method, ignoreInputParameter)
+                : Expression.Call(instance, method, ignoreInputParameter);
+            return Expression
+                .Lambda<Func<object, bool, bool>>(call, targetParameter, ignoreInputParameter)
+                .Compile();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static Func<object, object?>? TryBuildObjectGetter(Type type, params string[] names)
+    {
+        foreach (string name in names)
+        {
+            MemberInfo? member = FindReadableMember(type, name);
+            if (member == null)
+            {
+                continue;
+            }
+
+            try
+            {
+                ParameterExpression targetParameter = Expression.Parameter(typeof(object), "target");
+                Expression instance = GetMemberInstance(targetParameter, member);
+                Expression value = member is FieldInfo field
+                    ? Expression.Field(instance, field)
+                    : Expression.Property(instance, (PropertyInfo)member);
+                Expression boxedValue = Expression.Convert(value, typeof(object));
+                return Expression
+                    .Lambda<Func<object, object?>>(boxedValue, targetParameter)
+                    .Compile();
+            }
+            catch
+            {
+                continue;
+            }
+        }
+
+        return null;
+    }
+
+    private static Func<object, int>? TryBuildIntGetter(Type type, params string[] names)
+    {
+        foreach (string name in names)
+        {
+            MemberInfo? member = FindReadableMember(type, name);
+            if (member == null)
+            {
+                continue;
+            }
+
+            Type valueType = member is FieldInfo valueField ? valueField.FieldType : ((PropertyInfo)member).PropertyType;
+            if (!CanConvertToInt(valueType))
+            {
+                continue;
+            }
+
+            try
+            {
+                ParameterExpression targetParameter = Expression.Parameter(typeof(object), "target");
+                Expression instance = GetMemberInstance(targetParameter, member);
+                Expression value = member is FieldInfo field
+                    ? Expression.Field(instance, field)
+                    : Expression.Property(instance, (PropertyInfo)member);
+                Expression convertedValue = Expression.Convert(value, typeof(int));
+                return Expression
+                    .Lambda<Func<object, int>>(convertedValue, targetParameter)
+                    .Compile();
+            }
+            catch
+            {
+                continue;
+            }
+        }
+
+        return null;
+    }
+
+    private static MemberInfo? FindReadableMember(Type type, string name)
+    {
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
+        FieldInfo? field = type.GetField(name, flags);
+        if (field != null)
+        {
+            return field;
+        }
+
+        PropertyInfo? property = type.GetProperty(name, flags);
+        if (property == null || property.GetIndexParameters().Length != 0)
+        {
+            return null;
+        }
+
+        return property.GetGetMethod(nonPublic: true) == null ? null : property;
+    }
+
+    private static Expression GetMemberInstance(ParameterExpression targetParameter, MemberInfo member)
+    {
+        Type? declaringType = member.DeclaringType;
+        bool isStatic = member is FieldInfo field
+            ? field.IsStatic
+            : ((PropertyInfo)member).GetGetMethod(nonPublic: true)!.IsStatic;
+        return isStatic
+            ? null!
+            : Expression.Convert(targetParameter, declaringType!);
+    }
+
+    private static bool CanConvertToInt(Type type)
+    {
+        Type underlyingType = Nullable.GetUnderlyingType(type) ?? type;
+        return underlyingType.IsEnum ||
+               underlyingType == typeof(byte) ||
+               underlyingType == typeof(sbyte) ||
+               underlyingType == typeof(short) ||
+               underlyingType == typeof(ushort) ||
+               underlyingType == typeof(int) ||
+               underlyingType == typeof(uint) ||
+               underlyingType == typeof(long) ||
+               underlyingType == typeof(ulong);
     }
 
     private void LogNormal(string message)

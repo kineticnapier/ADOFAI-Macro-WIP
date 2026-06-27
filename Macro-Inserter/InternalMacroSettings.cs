@@ -17,7 +17,9 @@ public sealed class InternalMacroSettings : UnityModManager.ModSettings
     public FailureMode FailureMode = FailureMode.Stop;
     public double MaxLateRetryMs = 40.0;
     public bool EnableHighDensityMode = false;
-    public int MaxHitsPerPlayerControlUpdate = 8;
+    public bool EnableHighDensityFastPath = false;
+    public int MaxHitsPerPlayerControlUpdate = 64;
+    public int ValidateEveryHits = 32;
     public bool ExperimentalTimeSpoofForDirectHit = false;
     public bool EnableAdaptiveOffset = false;
     public bool ValidateAfterHit = false;

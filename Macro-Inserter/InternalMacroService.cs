@@ -22,6 +22,7 @@ internal sealed class InternalMacroService
     private const double RestartClockBackstepSeconds = 0.5;
     private const int DueBacklogFailureMultiplier = 4;
     private const int MinDueBacklogFailureThreshold = 16;
+    private const int SpeedChangeAdaptiveSuppressHitCount = 8;
 
     private readonly InternalMacroSettings settings;
     private readonly Action<string> log;
@@ -54,10 +55,18 @@ internal sealed class InternalMacroService
     private int hitDiffSampleCount;
     private double hitDiffTotalMs;
     private double hitDiffMaxAbsMs;
-    private readonly Queue<double> recentDirectHitDiffMs = new();
+    private readonly Dictionary<SpeedBand, Queue<double>> recentDirectHitDiffMsByBand = new();
     private double adaptiveOffsetMs;
     private double medianDispatchLagMs;
     private bool suppressNextAdaptiveCorrection;
+    private int speedChangeAdaptiveSuppressHitsRemaining;
+    private int expectedFloorSeqId = -1;
+    private int fastPathHitsSinceValidation;
+    private int lastHitsThisUpdate;
+    private int maxHitsInSingleUpdate;
+    private int kpsWindowHits;
+    private float kpsWindowStartTime = -1.0f;
+    private double kpsEstimate;
 
     public int HitDiffSampleCount => hitDiffSampleCount;
     public double AverageHitDiffMs => hitDiffSampleCount == 0 ? 0.0 : hitDiffTotalMs / hitDiffSampleCount;
@@ -67,6 +76,9 @@ internal sealed class InternalMacroService
     public double MedianDispatchLagMs => medianDispatchLagMs;
     public int DetectedMidspinCount => cachedDetectedMidspinCount;
     public int SkippedDuplicateTimeCount => cachedSkippedDuplicateTimeCount;
+    public int LastHitsThisUpdate => lastHitsThisUpdate;
+    public int MaxHitsInSingleUpdate => maxHitsInSingleUpdate;
+    public double KpsEstimate => kpsEstimate;
 
     public InternalMacroService(InternalMacroSettings settings, Action<string> log)
     {
@@ -317,6 +329,8 @@ internal sealed class InternalMacroService
         running = false;
         plan = Array.Empty<MacroPlanEntry>();
         nextIndex = 0;
+        expectedFloorSeqId = -1;
+        fastPathHitsSinceValidation = 0;
         firstInputPatchScheduled = false;
         InputPatchState.Reset();
 
@@ -339,8 +353,11 @@ internal sealed class InternalMacroService
 
         armed = true;
         firstInputPatchScheduled = false;
+        expectedFloorSeqId = -1;
+        fastPathHitsSinceValidation = 0;
         ResetHitDiffStats();
         ResetAdaptiveOffset();
+        ResetThroughputStats();
         nextIndex = 0;
         MacroPlanEntry firstEntry = plan[0];
         log($"Scheduler armed. entries={plan.Count}, firstSeqID={firstEntry.SeqId}, firstTargetTime={firstEntry.TargetTimeSeconds:F6}s, clockMode={settings.ClockMode}, fireMode={settings.FireMode}, dryRun={settings.DryRun}");
@@ -483,6 +500,10 @@ internal sealed class InternalMacroService
         running = true;
         runningFireMode = settings.FireMode;
         runningClockMode = settings.ClockMode;
+        directHitInvoker.PrepareForRun();
+        expectedFloorSeqId = hasCurrentFloor ? currentFloor : -1;
+        fastPathHitsSinceValidation = 0;
+        ResetThroughputStats();
         MacroPlanEntry firstEntry = plan[nextIndex];
         string currentFloorText = hasCurrentFloor ? currentFloor.ToString() : "<unavailable>";
         log($"Scheduler started. entries={plan.Count}, startIndex={nextIndex}, firstSeqID={firstEntry.SeqId}, firstTargetTime={firstEntry.TargetTimeSeconds:F6}s, clockTime={clockSeconds:F6}s, currentFloor={currentFloorText}, clockMode={settings.ClockMode}, fireMode={settings.FireMode}, dryRun={settings.DryRun}");
@@ -628,9 +649,33 @@ internal sealed class InternalMacroService
             dueCount = CountDueEntries(clockSeconds);
         }
 
+        if (TryFireDirectHitFastPath(
+                allowDirectHit,
+                clockSeconds,
+                dueCount,
+                maxHitsThisUpdate,
+                currentFloorSeqId,
+                out int fastPathHits))
+        {
+            RecordHitsThisUpdate(fastPathHits);
+            return;
+        }
+
         while (nextIndex < plan.Count)
         {
             MacroPlanEntry entry = plan[nextIndex];
+            bool limitCatchupForThisEntry = settings.FireMode == FireMode.DirectHit &&
+                                            settings.EnableHighDensityMode &&
+                                            ShouldLimitCatchupAroundSpeedChange(entry);
+            if (settings.FireMode == FireMode.DirectHit &&
+                settings.EnableHighDensityMode &&
+                hitsThisUpdate > 0 &&
+                limitCatchupForThisEntry)
+            {
+                LogVerbose($"speedChangeBoundary catch-up limited. hitsThisUpdate={hitsThisUpdate} nextSeqID={entry.SeqId} dueCount={dueCount} suppressHitsRemaining={speedChangeAdaptiveSuppressHitsRemaining}");
+                break;
+            }
+
             double effectiveTargetTimeSeconds = GetEffectiveTargetTimeSeconds(entry);
             if (effectiveTargetTimeSeconds > clockSeconds)
             {
@@ -648,6 +693,7 @@ internal sealed class InternalMacroService
             if (entry.IsMidspin && currentFloorSeqId > entry.SeqId)
             {
                 LogNormal($"floorGuard skipped: already passed midspin target. currentFloor={currentFloorSeqId} targetSeqID={entry.SeqId}");
+                expectedFloorSeqId = currentFloorSeqId;
                 nextIndex++;
                 continue;
             }
@@ -658,6 +704,7 @@ internal sealed class InternalMacroService
                     ? "already passed target"
                     : "already at target";
                 LogNormal($"floorGuard skipped: {floorGuardReason}. currentFloor={currentFloorSeqId} targetSeqID={entry.SeqId}");
+                expectedFloorSeqId = currentFloorSeqId;
                 nextIndex++;
                 continue;
             }
@@ -771,17 +818,27 @@ internal sealed class InternalMacroService
                 if (shouldConsumeDirectHit)
                 {
                     RecordHitDiff(diffMs);
+                    BeginSpeedChangeSuppressIfNeeded(entry);
                     UpdateAdaptiveOffsetAfterDirectHit(diffMs, dueCount, entry);
+                    ConsumeSpeedChangeSuppressHit();
                     nextIndex++;
+                    expectedFloorSeqId = result.AfterFloorSeqId >= 0
+                        ? result.AfterFloorSeqId
+                        : entry.IsMidspin
+                            ? currentFloorSeqId
+                            : entry.SeqId;
                     hitsThisUpdate++;
                     if (!settings.EnableHighDensityMode)
                     {
                         break;
                     }
 
-                    if (hitsThisUpdate >= maxHitsThisUpdate)
+                    int currentMaxHitsThisUpdate = limitCatchupForThisEntry
+                        ? 1
+                        : maxHitsThisUpdate;
+                    if (hitsThisUpdate >= currentMaxHitsThisUpdate)
                     {
-                        LogVerbose($"highDensity maxHitsReached hitsThisUpdate={hitsThisUpdate} maxHitsPerUpdate={maxHitsThisUpdate} nextIndex={nextIndex} dueCount={dueCount}");
+                        LogVerbose($"highDensity maxHitsReached hitsThisUpdate={hitsThisUpdate} maxHitsPerUpdate={currentMaxHitsThisUpdate} nextIndex={nextIndex} dueCount={dueCount}");
                         break;
                     }
 
@@ -820,6 +877,160 @@ internal sealed class InternalMacroService
             hitsThisUpdate > 0)
         {
             LogVerbose($"highDensity hitsThisUpdate={hitsThisUpdate} maxHitsPerUpdate={maxHitsThisUpdate} dueCount={dueCount} nextIndex={nextIndex}");
+        }
+
+        RecordHitsThisUpdate(hitsThisUpdate);
+    }
+
+    private bool TryFireDirectHitFastPath(
+        bool allowDirectHit,
+        double clockSeconds,
+        int dueCount,
+        int maxHitsThisUpdate,
+        int currentFloorSeqId,
+        out int hitsThisUpdate)
+    {
+        hitsThisUpdate = 0;
+        if (!allowDirectHit ||
+            settings.FireMode != FireMode.DirectHit ||
+            !settings.EnableHighDensityMode ||
+            !settings.EnableHighDensityFastPath ||
+            settings.ValidateAfterHit ||
+            settings.DryRun ||
+            !directHitInvoker.CanUseFastPath())
+        {
+            return false;
+        }
+
+        if (expectedFloorSeqId < 0)
+        {
+            expectedFloorSeqId = currentFloorSeqId;
+        }
+
+        if (currentFloorSeqId != expectedFloorSeqId)
+        {
+            log($"FastPath validation failed before burst. expectedFloor={expectedFloorSeqId} actualFloor={currentFloorSeqId}");
+            Stop("fast path floor mismatch");
+            return true;
+        }
+
+        int maxHits = Math.Max(1, maxHitsThisUpdate);
+        while (nextIndex < plan.Count && hitsThisUpdate < maxHits)
+        {
+            MacroPlanEntry entry = plan[nextIndex];
+            if (entry.IsMidspin ||
+                entry.IsNearMidspin ||
+                ShouldLimitCatchupAroundSpeedChange(entry))
+            {
+                return hitsThisUpdate > 0;
+            }
+
+            double effectiveTargetTimeSeconds = GetEffectiveTargetTimeSeconds(entry);
+            if (effectiveTargetTimeSeconds > clockSeconds)
+            {
+                break;
+            }
+
+            double diffMs = (clockSeconds - effectiveTargetTimeSeconds) * 1000.0;
+            if (diffMs > settings.MaxLateRetryMs)
+            {
+                suppressNextAdaptiveCorrection = true;
+                if (HandleHitFailedTooLate(entry, clockSeconds, diffMs, "fast path entry too late before hit"))
+                {
+                    if (!running)
+                    {
+                        return true;
+                    }
+
+                    continue;
+                }
+
+                break;
+            }
+
+            if (expectedFloorSeqId >= entry.SeqId)
+            {
+                nextIndex++;
+                continue;
+            }
+
+            if (expectedFloorSeqId < entry.SeqId - 1)
+            {
+                LogFireSkip($"fast path floor not ready: expectedFloor={expectedFloorSeqId} targetSeqID={entry.SeqId} clockTime={clockSeconds:F6}s");
+                suppressNextAdaptiveCorrection = true;
+                break;
+            }
+
+            if (!directHitInvoker.TryInvokeFast(effectiveTargetTimeSeconds, out bool accepted) || !accepted)
+            {
+                log($"FastPath DirectHit failed. seqID={entry.SeqId} expectedFloor={expectedFloorSeqId} targetTime={effectiveTargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s");
+                Stop("fast path direct hit failed");
+                return true;
+            }
+
+            RecordHitDiff(diffMs);
+            UpdateAdaptiveOffsetAfterDirectHit(diffMs, dueCount, entry);
+            nextIndex++;
+            expectedFloorSeqId = entry.SeqId;
+            hitsThisUpdate++;
+            fastPathHitsSinceValidation++;
+
+            if (fastPathHitsSinceValidation >= Math.Max(1, settings.ValidateEveryHits))
+            {
+                if (!ValidateFastPathFloor())
+                {
+                    return true;
+                }
+
+                fastPathHitsSinceValidation = 0;
+            }
+        }
+
+        return true;
+    }
+
+    private bool ValidateFastPathFloor()
+    {
+        if (!TryReadCurrentFloorSeqId(out int actualFloorSeqId))
+        {
+            log($"FastPath validation failed: current floor unavailable. expectedFloor={expectedFloorSeqId}");
+            Stop("fast path validation failed");
+            return false;
+        }
+
+        if (actualFloorSeqId != expectedFloorSeqId)
+        {
+            log($"FastPath validation failed. expectedFloor={expectedFloorSeqId} actualFloor={actualFloorSeqId}");
+            Stop("fast path floor mismatch");
+            return false;
+        }
+
+        return true;
+    }
+
+    private bool ShouldLimitCatchupAroundSpeedChange(MacroPlanEntry entry)
+    {
+        return entry.IsNearSpeedChange ||
+               speedChangeAdaptiveSuppressHitsRemaining > 0;
+    }
+
+    private void BeginSpeedChangeSuppressIfNeeded(MacroPlanEntry entry)
+    {
+        if (!entry.IsNearSpeedChange)
+        {
+            return;
+        }
+
+        speedChangeAdaptiveSuppressHitsRemaining = Math.Max(
+            speedChangeAdaptiveSuppressHitsRemaining,
+            SpeedChangeAdaptiveSuppressHitCount);
+    }
+
+    private void ConsumeSpeedChangeSuppressHit()
+    {
+        if (speedChangeAdaptiveSuppressHitsRemaining > 0)
+        {
+            speedChangeAdaptiveSuppressHitsRemaining--;
         }
     }
 
@@ -893,12 +1104,47 @@ internal sealed class InternalMacroService
         hitDiffMaxAbsMs = Math.Max(hitDiffMaxAbsMs, Math.Abs(diffMs));
     }
 
+    private void RecordHitsThisUpdate(int hitsThisUpdate)
+    {
+        lastHitsThisUpdate = hitsThisUpdate;
+        if (hitsThisUpdate <= 0)
+        {
+            return;
+        }
+
+        maxHitsInSingleUpdate = Math.Max(maxHitsInSingleUpdate, hitsThisUpdate);
+        float now = Time.unscaledTime;
+        if (kpsWindowStartTime < 0.0f)
+        {
+            kpsWindowStartTime = now;
+            kpsWindowHits = 0;
+        }
+
+        kpsWindowHits += hitsThisUpdate;
+        float elapsed = now - kpsWindowStartTime;
+        if (elapsed >= 0.25f)
+        {
+            kpsEstimate = kpsWindowHits / Math.Max(0.001f, elapsed);
+            kpsWindowStartTime = now;
+            kpsWindowHits = 0;
+        }
+    }
+
+    private void ResetThroughputStats()
+    {
+        lastHitsThisUpdate = 0;
+        maxHitsInSingleUpdate = 0;
+        kpsWindowHits = 0;
+        kpsWindowStartTime = -1.0f;
+        kpsEstimate = 0.0;
+    }
+
     private void ResetHitDiffStats()
     {
         hitDiffSampleCount = 0;
         hitDiffTotalMs = 0.0;
         hitDiffMaxAbsMs = 0.0;
-        recentDirectHitDiffMs.Clear();
+        recentDirectHitDiffMsByBand.Clear();
         medianDispatchLagMs = 0.0;
     }
 
@@ -906,6 +1152,7 @@ internal sealed class InternalMacroService
     {
         adaptiveOffsetMs = 0.0;
         suppressNextAdaptiveCorrection = false;
+        speedChangeAdaptiveSuppressHitsRemaining = 0;
     }
 
     private void UpdateAdaptiveOffsetAfterDirectHit(double diffMs, int dueCount, MacroPlanEntry entry)
@@ -918,19 +1165,22 @@ internal sealed class InternalMacroService
         if (dueCount > 1 ||
             entry.IsMidspin ||
             entry.IsNearMidspin ||
+            entry.IsNearSpeedChange ||
+            speedChangeAdaptiveSuppressHitsRemaining > 0 ||
             suppressNextAdaptiveCorrection)
         {
             suppressNextAdaptiveCorrection = false;
             return;
         }
 
-        recentDirectHitDiffMs.Enqueue(diffMs);
-        while (recentDirectHitDiffMs.Count > AdaptiveDiffWindowSize)
+        Queue<double> samples = GetDirectHitDiffSamples(entry.SpeedBand);
+        samples.Enqueue(diffMs);
+        while (samples.Count > AdaptiveDiffWindowSize)
         {
-            recentDirectHitDiffMs.Dequeue();
+            samples.Dequeue();
         }
 
-        medianDispatchLagMs = CalculateMedian(recentDirectHitDiffMs);
+        medianDispatchLagMs = CalculateMedian(samples);
 
         double targetAdaptiveOffsetMs = -medianDispatchLagMs;
         double nextAdaptiveOffsetMs = adaptiveOffsetMs +
@@ -938,7 +1188,18 @@ internal sealed class InternalMacroService
         adaptiveOffsetMs = Math.Max(
             -AdaptiveMaxAbsMs,
             Math.Min(AdaptiveMaxAbsMs, nextAdaptiveOffsetMs));
-        LogVerbose($"AdaptiveOffset dispatch-lag updated. medianDispatchLagMs={medianDispatchLagMs:F3} targetAdaptiveOffsetMs={targetAdaptiveOffsetMs:F3} adaptiveOffsetMs={adaptiveOffsetMs:F3} effectiveOffsetMs={EffectiveOffsetMs:F3}");
+        LogVerbose($"AdaptiveOffset dispatch-lag updated. speedBand={entry.SpeedBand} medianDispatchLagMs={medianDispatchLagMs:F3} targetAdaptiveOffsetMs={targetAdaptiveOffsetMs:F3} adaptiveOffsetMs={adaptiveOffsetMs:F3} effectiveOffsetMs={EffectiveOffsetMs:F3}");
+    }
+
+    private Queue<double> GetDirectHitDiffSamples(SpeedBand speedBand)
+    {
+        if (!recentDirectHitDiffMsByBand.TryGetValue(speedBand, out Queue<double> samples))
+        {
+            samples = new Queue<double>();
+            recentDirectHitDiffMsByBand[speedBand] = samples;
+        }
+
+        return samples;
     }
 
     private static double CalculateMedian(IEnumerable<double> values)
@@ -1052,9 +1313,14 @@ internal sealed class InternalMacroService
         }
     }
 
-    private static bool TryReadCurrentFloorSeqId(out int seqId)
+    private bool TryReadCurrentFloorSeqId(out int seqId)
     {
         seqId = 0;
+        if (directHitInvoker.TryReadCurrentFloorSeqId(out seqId))
+        {
+            return true;
+        }
+
         object? controller = ReflectionCache.GetSingletonInstance("scrController");
         if (controller == null)
         {

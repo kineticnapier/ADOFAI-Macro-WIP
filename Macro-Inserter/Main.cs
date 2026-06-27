@@ -14,7 +14,8 @@ public static class Main
     private static UnityModManager.ModEntry? modEntry;
     private static string macroOffsetText = "0";
     private static string maxLateRetryMsText = "40";
-    private static string maxHitsPerPlayerControlUpdateText = "8";
+    private static string maxHitsPerPlayerControlUpdateText = "64";
+    private static string validateEveryHitsText = "32";
     private static string virtualInputKeyCountText = "1";
     private static bool enabled;
     private static float lastOnUpdateExceptionLogTime = -10.0f;
@@ -28,6 +29,7 @@ public static class Main
         macroOffsetText = settings.MacroOffsetMs.ToString(CultureInfo.InvariantCulture);
         maxLateRetryMsText = settings.MaxLateRetryMs.ToString(CultureInfo.InvariantCulture);
         maxHitsPerPlayerControlUpdateText = settings.MaxHitsPerPlayerControlUpdate.ToString(CultureInfo.InvariantCulture);
+        validateEveryHitsText = settings.ValidateEveryHits.ToString(CultureInfo.InvariantCulture);
         virtualInputKeyCountText = settings.VirtualInputKeyCount.ToString(CultureInfo.InvariantCulture);
         service = new InternalMacroService(settings, Log);
 
@@ -147,12 +149,22 @@ public static class Main
         GUILayout.EndHorizontal();
 
         settings.EnableHighDensityMode = GUILayout.Toggle(settings.EnableHighDensityMode, "EnableHighDensityMode");
+        settings.EnableHighDensityFastPath = GUILayout.Toggle(settings.EnableHighDensityFastPath, "FastPath enabled (BurstDirectHit)");
         GUILayout.BeginHorizontal();
         GUILayout.Label("MaxHits/Update", GUILayout.Width(140f));
         maxHitsPerPlayerControlUpdateText = GUILayout.TextField(maxHitsPerPlayerControlUpdateText, GUILayout.Width(120f));
         if (int.TryParse(maxHitsPerPlayerControlUpdateText, NumberStyles.Integer, CultureInfo.InvariantCulture, out int maxHitsPerUpdate))
         {
             settings.MaxHitsPerPlayerControlUpdate = Math.Max(1, maxHitsPerUpdate);
+        }
+        GUILayout.EndHorizontal();
+
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("ValidateEveryHits", GUILayout.Width(140f));
+        validateEveryHitsText = GUILayout.TextField(validateEveryHitsText, GUILayout.Width(120f));
+        if (int.TryParse(validateEveryHitsText, NumberStyles.Integer, CultureInfo.InvariantCulture, out int validateEveryHits))
+        {
+            settings.ValidateEveryHits = Math.Max(1, validateEveryHits);
         }
         GUILayout.EndHorizontal();
 
@@ -164,6 +176,7 @@ public static class Main
             GUILayout.Label($"Offset base={settings.MacroOffsetMs:F3}ms adaptive={service.AdaptiveOffsetMs:F3}ms effective={service.EffectiveOffsetMs:F3}ms medianDispatchLag={service.MedianDispatchLagMs:F3}ms");
             GUILayout.Label($"Plan detected midspin={service.DetectedMidspinCount} skippedDuplicateTime={service.SkippedDuplicateTimeCount}");
             GUILayout.Label($"Hit diff avg={service.AverageHitDiffMs:F3}ms maxAbs={service.MaxAbsHitDiffMs:F3}ms samples={service.HitDiffSampleCount}");
+            GUILayout.Label($"Throughput lastHits/update={service.LastHitsThisUpdate} maxHits/update={service.MaxHitsInSingleUpdate} kpsEstimate={service.KpsEstimate:F1}");
         }
 
         settings.EnableAdaptiveOffset = GUILayout.Toggle(settings.EnableAdaptiveOffset, "EnableAdaptiveOffset");
