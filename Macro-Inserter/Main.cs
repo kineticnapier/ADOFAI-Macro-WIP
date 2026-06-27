@@ -147,11 +147,12 @@ public static class Main
         if (service != null)
         {
             GUILayout.Label($"Offset base={settings.MacroOffsetMs:F3}ms adaptive={service.AdaptiveOffsetMs:F3}ms effective={service.EffectiveOffsetMs:F3}ms medianDiff={service.MedianDiffMs:F3}ms");
-            GUILayout.Label($"Plan skipped midspin={service.SkippedMidspinCount} duplicateTime={service.SkippedDuplicateTimeCount}");
+            GUILayout.Label($"Plan detected midspin={service.DetectedMidspinCount} skippedDuplicateTime={service.SkippedDuplicateTimeCount}");
             GUILayout.Label($"Hit diff avg={service.AverageHitDiffMs:F3}ms maxAbs={service.MaxAbsHitDiffMs:F3}ms samples={service.HitDiffSampleCount}");
         }
 
         settings.ValidateAfterHit = GUILayout.Toggle(settings.ValidateAfterHit, "ValidateAfterHit");
+        GUILayout.Label("ValidateAfterHit is for debugging only. Leave it off for normal runs.");
         settings.DirectHitIgnoreInput = GUILayout.Toggle(settings.DirectHitIgnoreInput, "DirectHitIgnoreInput");
 
         GUILayout.BeginHorizontal();

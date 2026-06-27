@@ -33,28 +33,27 @@ internal sealed class MacroPlanBuilder
 
         double offsetSeconds = macroOffsetMs / 1000.0;
         List<MacroPlanEntry> entries = new();
-        HashSet<int> skippedMidspinSeqIds = new();
-        int skippedMidspinCount = 0;
+        HashSet<int> midspinSeqIds = new();
+        int detectedMidspinCount = 0;
 
         foreach (object floor in floors)
         {
-            if (IsMidspinFloor(floor, out int midspinSeqId))
+            bool isMidspin = IsMidspinFloor(floor, out int midspinSeqId);
+            if (isMidspin)
             {
-                skippedMidspinCount++;
+                detectedMidspinCount++;
                 if (midspinSeqId > 0)
                 {
-                    skippedMidspinSeqIds.Add(midspinSeqId);
+                    midspinSeqIds.Add(midspinSeqId);
                 }
 
                 if (logPreview)
                 {
-                    log($"MacroPlan skipped midspin seqID={midspinSeqId}");
+                    log($"MacroPlan detected midspin seqID={midspinSeqId}");
                 }
-
-                continue;
             }
 
-            if (TryBuildEntry(floor, offsetSeconds, out MacroPlanEntry? entry) && entry != null)
+            if (TryBuildEntry(floor, offsetSeconds, isMidspin, out MacroPlanEntry? entry) && entry != null)
             {
                 entries.Add(entry);
             }
@@ -70,21 +69,25 @@ internal sealed class MacroPlanBuilder
         foreach (MacroPlanEntry entry in orderedEntries)
         {
             if (previous != null &&
+                !entry.IsMidspin &&
+                !previous.IsMidspin &&
+                entry.SeqId == previous.SeqId &&
                 Math.Abs(entry.TargetTimeSeconds - previous.TargetTimeSeconds) < DuplicateTargetTimeThresholdSeconds)
             {
                 skippedDuplicateTimeCount++;
                 if (logPreview)
                 {
-                    log($"MacroPlan skipped duplicate targetTime seqID={entry.SeqId} previousSeqID={previous.SeqId} targetTime={entry.TargetTimeSeconds:F6}s");
+                    log($"MacroPlan skipped duplicate same-floor targetTime seqID={entry.SeqId} targetTime={entry.TargetTimeSeconds:F6}s");
                 }
 
                 continue;
             }
 
-            bool isNearMidspin = skippedMidspinSeqIds.Contains(entry.SeqId - 1) ||
-                                 skippedMidspinSeqIds.Contains(entry.SeqId + 1);
-            MacroPlanEntry filteredEntry = isNearMidspin
-                ? new MacroPlanEntry(entry.SeqId, entry.TargetTimeSeconds, isNearMidspin: true)
+            bool isNearMidspin = entry.IsMidspin ||
+                                 midspinSeqIds.Contains(entry.SeqId - 1) ||
+                                 midspinSeqIds.Contains(entry.SeqId + 1);
+            MacroPlanEntry filteredEntry = isNearMidspin != entry.IsNearMidspin
+                ? new MacroPlanEntry(entry.SeqId, entry.TargetTimeSeconds, entry.IsMidspin, isNearMidspin)
                 : entry;
             filteredEntries.Add(filteredEntry);
             previous = filteredEntry;
@@ -97,7 +100,7 @@ internal sealed class MacroPlanBuilder
             return new MacroPlanBuildResult(
                 plan,
                 "Macro plan is empty after filtering seqID <= 0 and targetTime <= 0.",
-                skippedMidspinCount,
+                detectedMidspinCount,
                 skippedDuplicateTimeCount);
         }
 
@@ -109,7 +112,7 @@ internal sealed class MacroPlanBuilder
             }
         }
 
-        return new MacroPlanBuildResult(plan, failureReason: null, skippedMidspinCount, skippedDuplicateTimeCount);
+        return new MacroPlanBuildResult(plan, failureReason: null, detectedMidspinCount, skippedDuplicateTimeCount);
     }
 
     private static string CombineFailureReasons(params string?[] reasons)
@@ -172,7 +175,7 @@ internal sealed class MacroPlanBuilder
         }
     }
 
-    private static bool TryBuildEntry(object floor, double offsetSeconds, out MacroPlanEntry? entry)
+    private static bool TryBuildEntry(object floor, double offsetSeconds, bool isMidspin, out MacroPlanEntry? entry)
     {
         entry = null;
         if (!ReflectionCache.TryReadInt(floor, out int seqId, "seqID", "seqId", "floorSeqID") ||
@@ -200,7 +203,7 @@ internal sealed class MacroPlanBuilder
                 return false;
             }
 
-            entry = new MacroPlanEntry(seqId, targetTimeSeconds);
+            entry = new MacroPlanEntry(seqId, targetTimeSeconds, isMidspin);
             return true;
         }
         catch

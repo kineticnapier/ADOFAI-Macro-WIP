@@ -7,12 +7,12 @@ internal sealed class MacroPlanBuildResult
     public MacroPlanBuildResult(
         IReadOnlyList<MacroPlanEntry> plan,
         string? failureReason,
-        int skippedMidspinCount = 0,
+        int detectedMidspinCount = 0,
         int skippedDuplicateTimeCount = 0)
     {
         Plan = plan;
         FailureReason = failureReason;
-        SkippedMidspinCount = skippedMidspinCount;
+        DetectedMidspinCount = detectedMidspinCount;
         SkippedDuplicateTimeCount = skippedDuplicateTimeCount;
     }
 
@@ -20,7 +20,7 @@ internal sealed class MacroPlanBuildResult
 
     public string? FailureReason { get; }
 
-    public int SkippedMidspinCount { get; }
+    public int DetectedMidspinCount { get; }
 
     public int SkippedDuplicateTimeCount { get; }
 }
