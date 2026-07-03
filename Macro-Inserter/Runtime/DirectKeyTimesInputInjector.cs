@@ -7,6 +7,11 @@ namespace Macro_Inserter;
 
 internal static class DirectKeyTimesInputInjector
 {
+    // v29: keep burst draining conservative. PseudoChordInputPlanFix no longer
+    // uses the direct-hit finish path during normal playback because it can
+    // advance floor state without preserving all game-side timing state.
+    private const int MaxBurstStalledSimulationSteps = 128;
+
     private static MethodInfo? simulatedPlayerControlUpdate;
     private static bool forcingSimulation;
     private static bool warnedMissingSimulationMethod;
@@ -96,6 +101,136 @@ internal static class DirectKeyTimesInputInjector
         return afterFloor;
     }
 
+
+    public static int InjectBurst(
+        object? controller,
+        int keyCount,
+        int targetFloorSeqId,
+        bool forceSimulation,
+        int maxSimulationSteps,
+        Action<string>? log)
+    {
+        if (controller == null)
+        {
+            log?.Invoke("directKeyTimes burst failed: scrController instance was not found.");
+            return -1;
+        }
+
+        int beforeFloor = ReadCurrentFloorSeqId(controller);
+        if (!TryQueueKeyTimes(controller, keyCount, log, out _, out _, out _))
+        {
+            return beforeFloor;
+        }
+
+        int syntheticBudget = Math.Max(1, keyCount) * 4 + 64;
+        InputPatchState.AllowSyntheticHitInputEvents(syntheticBudget);
+
+        if (!forceSimulation)
+        {
+            return ReadCurrentFloorSeqId(controller);
+        }
+
+        int steps = 0;
+        int stalledSteps = 0;
+        int maxSteps = Math.Max(1, maxSimulationSteps);
+        while (steps < maxSteps)
+        {
+            int beforeStepFloor = ReadCurrentFloorSeqId(controller);
+            ForceSimulatedPlayerControlUpdate(controller, log);
+            int afterStepFloor = ReadCurrentFloorSeqId(controller);
+            steps++;
+
+            if (afterStepFloor >= targetFloorSeqId)
+            {
+                break;
+            }
+
+            int queuedKeys = ReadQueuedKeyTimesCount(controller);
+            if (afterStepFloor <= beforeStepFloor)
+            {
+                stalledSteps++;
+                if ((queuedKeys <= 0 && stalledSteps >= 2) || stalledSteps >= MaxBurstStalledSimulationSteps)
+                {
+                    break;
+                }
+            }
+            else
+            {
+                stalledSteps = 0;
+            }
+
+            if (queuedKeys <= 0 && afterStepFloor < targetFloorSeqId)
+            {
+                break;
+            }
+        }
+
+        int afterFloor = ReadCurrentFloorSeqId(controller);
+        if (afterFloor < targetFloorSeqId && keyCount >= 32)
+        {
+            log?.Invoke($"directKeyTimes burst drain partial. keyCount={keyCount} targetAfter={targetFloorSeqId} beforeFloor={beforeFloor} afterFloor={afterFloor} steps={steps} queuedKeys={ReadQueuedKeyTimesCount(controller)}");
+        }
+
+        return afterFloor;
+    }
+
+    public static int FinishBurstWithDirectHits(
+        object? controller,
+        int targetFloorSeqId,
+        int maxDirectHits,
+        Action<string>? log)
+    {
+        if (controller == null)
+        {
+            return -1;
+        }
+
+        int beforeFloor = ReadCurrentFloorSeqId(controller);
+        if (beforeFloor >= targetFloorSeqId)
+        {
+            return beforeFloor;
+        }
+
+        int limit = Math.Max(1, maxDirectHits);
+        InputPatchState.AllowSyntheticHitInputEvents(limit * 4 + 64);
+
+        int hits = 0;
+        int stalledHits = 0;
+        int lastFloor = beforeFloor;
+        while (hits < limit && lastFloor < targetFloorSeqId)
+        {
+            if (!TryInvokeDirectHit(controller, log))
+            {
+                break;
+            }
+
+            hits++;
+            int currentFloor = ReadCurrentFloorSeqId(controller);
+            if (currentFloor <= lastFloor)
+            {
+                stalledHits++;
+                if (stalledHits >= 4)
+                {
+                    break;
+                }
+            }
+            else
+            {
+                stalledHits = 0;
+                lastFloor = currentFloor;
+            }
+        }
+
+        int afterFloor = ReadCurrentFloorSeqId(controller);
+        ClearQueuedKeyTimes(controller, null);
+        if (afterFloor > beforeFloor)
+        {
+            log?.Invoke($"directKeyTimes burst direct finish advanced. beforeFloor={beforeFloor} afterFloor={afterFloor} targetAfter={targetFloorSeqId} directHits={hits}");
+        }
+
+        return afterFloor;
+    }
+
     public static int ReadCurrentFloorSeqId(object? controller)
     {
         if (controller == null)
@@ -110,6 +245,13 @@ internal static class DirectKeyTimesInputInjector
         }
 
         return ReflectionCache.TryReadInt(floor, out int seqId, "seqID", "seqId", "SeqId") ? seqId : -1;
+    }
+
+
+    private static int ReadQueuedKeyTimesCount(object controller)
+    {
+        object? rawKeyTimes = ReflectionCache.ReadMember(controller, "keyTimes");
+        return rawKeyTimes is IList keyTimes ? keyTimes.Count : 0;
     }
 
     private static bool TryQueueKeyTimes(

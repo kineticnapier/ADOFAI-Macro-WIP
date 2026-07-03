@@ -17,10 +17,16 @@ namespace Macro_Inserter
 {
     internal static class PseudoChordInputPlanFix
     {
-        private static readonly Harmony Harmony = new Harmony("Macro-Inserter.PseudoChordInputPlanFix.v24");
+        private static readonly Harmony Harmony = new Harmony("Macro-Inserter.PseudoChordInputPlanFix.v30");
         private static readonly FieldInfo? SettingsField = AccessTools.Field(typeof(InternalMacroService), "settings");
         private static readonly FieldInfo? LogField = AccessTools.Field(typeof(InternalMacroService), "log");
-        private static readonly MethodInfo? PulseMacroKeyViewerMethod = AccessTools.Method(typeof(InternalMacroService), "PulseMacroKeyViewer");
+        private static readonly FieldInfo? InputPlanField = AccessTools.Field(typeof(InternalMacroService), "inputPlan");
+        private static readonly FieldInfo? NextIndexField = AccessTools.Field(typeof(InternalMacroService), "nextIndex");
+
+        private const int BurstDueCountThreshold = int.MaxValue;
+        private const int BurstKeyCountThreshold = int.MaxValue;
+        private const int MaxBurstEntries = 4096;
+        private const int MaxBurstKeys = 4096;
 
         private static int directKeyTimesEntriesSinceSummary;
         private static int directKeyTimesKeysSinceSummary;
@@ -89,11 +95,11 @@ namespace Macro_Inserter
                 }
 
                 patched = buildPatched && firePatched;
-                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v24 installed by {reason}. buildPatched={buildPatched} firePatched={firePatched}");
+                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v30 installed by {reason}. buildPatched={buildPatched} firePatched={firePatched}");
             }
             catch (Exception ex)
             {
-                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v24 install failed: {ex}");
+                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v30 install failed: {ex}");
             }
         }
 
@@ -113,7 +119,7 @@ namespace Macro_Inserter
             {
                 // The runtime input-pipeline plan is executed through the original
                 // DirectHit branch because that is the only branch that calls
-                // TryFirePseudoChordGroup(). The v11/v12/v13/v14/v15/v17/v18/v20/v21/v23/v24 prefix on that method
+                // TryFirePseudoChordGroup(). The v11/v12/v13/v14/v15/v17/v18/v20/v21/v23/v24/v25/v26/v27/v28/v29/v30 prefix on that method
                 // intercepts the call and schedules InputPatchState instead of
                 // calling scrController.Hit() directly.
                 //
@@ -134,11 +140,11 @@ namespace Macro_Inserter
                     log("Runtime input-pipeline plan active; forcing EnableHighDensityMode=True so DirectKeyTimes can keep up with dense input sections.");
                 }
 
-                if (settings.MaxHitsPerPlayerControlUpdate < 64)
+                if (settings.MaxHitsPerPlayerControlUpdate < 5000)
                 {
                     int previousMaxHits = settings.MaxHitsPerPlayerControlUpdate;
-                    settings.MaxHitsPerPlayerControlUpdate = 64;
-                    log($"Runtime input-pipeline plan active; raising MaxHitsPerPlayerControlUpdate from {previousMaxHits} to 64.");
+                    settings.MaxHitsPerPlayerControlUpdate = 5000;
+                    log($"Runtime input-pipeline plan active; raising MaxHitsPerPlayerControlUpdate from {previousMaxHits} to 5000 for dense directKeyTimes sections.");
                 }
 
                 __result = runtimeInputPlan;
@@ -184,12 +190,52 @@ namespace Macro_Inserter
             // around 180-degree turns because this bypasses too much of the normal
             // keyTimes/update path. v24 keeps directKeyTimes as the primary path for
             // every entry, and only uses DirectHit as a delayed emergency retry for a
-            // plain single that is already stuck.
+            // plain single that is already stuck. v25 adds a burst drain path for
+            // sections where thousands of floor events per second make one-prefix-per-entry
+            // scheduling too expensive. v26 raises burst caps and gives stalled
+            // bursts more simulated updates before falling back. v27 tried a last-resort
+            // direct-hit finish after burst drain, but that can corrupt sections
+            // that already worked through the normal input queue. v28 keeps the
+            // dense KV throttling, removes the direct-hit finish, and only enables
+            // burst mode for genuinely dense key bursts. v29 disables burst execution again for stability comparisons and keeps only the safer KV throttling. v30 changes only MacroKeyViewer fingering: beat-bank key assignment, while gameplay input stays directKeyTimes.
             bool plainSingle =
                 keyCount == 1 &&
                 entry.RawEntryCount == 1 &&
                 !entry.ContainsMidspin &&
                 !entry.IsCompressed;
+
+            if (TryBuildDueBurst(
+                    __instance,
+                    dueCount,
+                    out int burstEntryCount,
+                    out int burstKeyCount,
+                    out int burstTargetSeqId))
+            {
+                int burstAfterFloor = DirectKeyTimesInputInjector.InjectBurst(
+                    controller,
+                    burstKeyCount,
+                    burstTargetSeqId,
+                    forceSimulation: asyncInputActive,
+                    maxSimulationSteps: Math.Min(MaxBurstKeys + 64, Math.Max(1, burstKeyCount) + 64),
+                    log);
+
+                if (burstAfterFloor >= entry.FirstSeqId)
+                {
+                    ResetStuckPlainSingle(entry.FirstSeqId);
+                    currentFloorAfter = burstAfterFloor;
+                    PulseMacroKeyViewer(__instance, entry, burstKeyCount);
+                    RecordDirectKeyTimesSummary(log, burstKeyCount, currentFloorBefore, burstAfterFloor, asyncInputActive);
+                    if (burstAfterFloor < burstTargetSeqId)
+                    {
+                        log?.Invoke($"directKeyTimes burst partial. dueCount={dueCount} burstEntries={burstEntryCount} burstKeys={burstKeyCount} targetAfter={burstTargetSeqId} currentFloorBefore={currentFloorBefore} afterFloor={burstAfterFloor}");
+                    }
+
+                    __result = true;
+                    return false;
+                }
+
+                log?.Invoke($"directKeyTimes burst did not reach first target. dueCount={dueCount} burstEntries={burstEntryCount} burstKeys={burstKeyCount} targetAfter={burstTargetSeqId} currentFloorBefore={currentFloorBefore} afterFloor={burstAfterFloor}");
+            }
 
             int afterFloor = DirectKeyTimesInputInjector.Inject(
                 controller,
@@ -202,7 +248,7 @@ namespace Macro_Inserter
             {
                 ResetStuckPlainSingle(entry.FirstSeqId);
                 currentFloorAfter = afterFloor;
-                PulseMacroKeyViewer(__instance, keyCount);
+                PulseMacroKeyViewer(__instance, entry, keyCount);
                 RecordDirectKeyTimesSummary(log, keyCount, currentFloorBefore, afterFloor, asyncInputActive);
                 __result = true;
                 return false;
@@ -225,7 +271,7 @@ namespace Macro_Inserter
                     {
                         ResetStuckPlainSingle(entry.FirstSeqId);
                         currentFloorAfter = fallbackAfterFloor;
-                        PulseMacroKeyViewer(__instance, keyCount);
+                        PulseMacroKeyViewer(__instance, entry, keyCount);
                         RecordDirectKeyTimesSummary(log, keyCount, currentFloorBefore, fallbackAfterFloor, asyncInputActive);
                         __result = true;
                         return false;
@@ -243,6 +289,54 @@ namespace Macro_Inserter
             __result = false;
             return false;
         }
+
+        private static bool TryBuildDueBurst(
+            InternalMacroService service,
+            int dueCount,
+            out int burstEntryCount,
+            out int burstKeyCount,
+            out int burstTargetSeqId)
+        {
+            burstEntryCount = 0;
+            burstKeyCount = 0;
+            burstTargetSeqId = -1;
+
+            if (dueCount < BurstDueCountThreshold)
+            {
+                return false;
+            }
+
+            if (InputPlanField?.GetValue(service) is not IReadOnlyList<InputPlanEntry> inputPlan ||
+                NextIndexField?.GetValue(service) is not int nextIndex ||
+                nextIndex < 0 ||
+                nextIndex >= inputPlan.Count)
+            {
+                return false;
+            }
+
+            int maxEntries = Math.Min(Math.Min(dueCount, MaxBurstEntries), inputPlan.Count - nextIndex);
+            for (int i = 0; i < maxEntries; i++)
+            {
+                InputPlanEntry burstEntry = inputPlan[nextIndex + i];
+                if (!burstEntry.UseInputPatchPipeline)
+                {
+                    break;
+                }
+
+                int entryKeyCount = Math.Max(1, burstEntry.EmittedHitCount);
+                if (burstEntryCount > 0 && burstKeyCount + entryKeyCount > MaxBurstKeys)
+                {
+                    break;
+                }
+
+                burstEntryCount++;
+                burstKeyCount += entryKeyCount;
+                burstTargetSeqId = Math.Max(burstTargetSeqId, burstEntry.LastSeqId);
+            }
+
+            return burstEntryCount >= BurstDueCountThreshold && burstKeyCount >= BurstKeyCountThreshold && burstTargetSeqId > 0;
+        }
+
         private static int RegisterStuckPlainSingle(int seqId)
         {
             if (stuckPlainSingleSeqId == seqId)
@@ -267,19 +361,55 @@ namespace Macro_Inserter
             }
         }
 
-        private static void PulseMacroKeyViewer(InternalMacroService service, int keyCount)
+        private static void PulseMacroKeyViewer(InternalMacroService service, InputPlanEntry entry, int keyCount)
         {
-            if (PulseMacroKeyViewerMethod == null || keyCount <= 0)
+            InternalMacroSettings? settings = SettingsField?.GetValue(service) as InternalMacroSettings;
+            if (settings == null || !settings.EnableMacroKeyViewer || keyCount <= 0)
             {
                 return;
             }
 
-            int pulseCount = Math.Min(keyCount, 64);
+            IReadOnlyList<string> configuredKeys = service.MacroKeyViewer.ConfigureKeys(settings.MacroKeyViewerKeysText);
+            if (configuredKeys.Count == 0 && entry.AssignedKeyNames.Count == 0)
+            {
+                return;
+            }
+
+            // v30: the game input path still only queues keyTimes. Natural fingering is
+            // a MacroKeyViewer layer: pulse the beat-bank assigned key names instead of
+            // the old round-robin counter. Keep v29's UI load cap so dense sections do
+            // not destabilize playback.
+            if (keyCount >= 128)
+            {
+                return;
+            }
+
+            const int maxPulsesPerSummaryWindow = 64;
+            if (macroKeyViewerPulsesSinceSummary >= maxPulsesPerSummaryWindow)
+            {
+                return;
+            }
+
+            double durationSeconds = Math.Max(0, settings.MacroKeyViewerPulseMs) / 1000.0;
+            int remainingPulseBudget = maxPulsesPerSummaryWindow - macroKeyViewerPulsesSinceSummary;
+            int pulseCount = Math.Min(Math.Min(keyCount, 32), remainingPulseBudget);
             for (int i = 0; i < pulseCount; i++)
             {
+                string keyName;
+                if (entry.AssignedKeyNames.Count > 0)
+                {
+                    keyName = entry.AssignedKeyNames[i % entry.AssignedKeyNames.Count];
+                }
+                else
+                {
+                    int keyIndex = (int)(macroKeyViewerHitCounter % configuredKeys.Count);
+                    macroKeyViewerHitCounter++;
+                    keyName = configuredKeys[keyIndex];
+                }
+
                 try
                 {
-                    PulseMacroKeyViewerMethod.Invoke(service, Array.Empty<object>());
+                    service.MacroKeyViewer.Pulse(keyName, durationSeconds);
                     macroKeyViewerPulsesSinceSummary++;
                 }
                 catch

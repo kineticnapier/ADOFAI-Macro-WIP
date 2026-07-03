@@ -12,6 +12,46 @@ internal static class AdofaiChartFileParser
 {
     private const double MidspinAngle = 999.0;
 
+
+    public static IReadOnlyDictionary<int, double> ParseBpmBySeqId(string path)
+    {
+        string text = SanitizeJson(File.ReadAllText(path));
+        double[] angleData = ParseAngleData(text);
+        if (angleData.Length == 0)
+        {
+            throw new InvalidOperationException("angleData is empty.");
+        }
+
+        ChartSettings settings = ParseSettings(text);
+        IReadOnlyList<ChartAction> actions = ParseActions(text);
+        Dictionary<int, List<ChartAction>> speedByFloor = actions
+            .Where(action => string.Equals(action.EventType, "SetSpeed", StringComparison.Ordinal))
+            .GroupBy(action => action.Floor)
+            .ToDictionary(group => group.Key, group => group.ToList());
+
+        Dictionary<int, double> result = new Dictionary<int, double>();
+        double currentBpm = settings.InitialBpm * settings.Pitch / 100.0;
+        for (int floor = 0; floor < angleData.Length; floor++)
+        {
+            if (speedByFloor.TryGetValue(floor, out List<ChartAction>? speedEvents))
+            {
+                foreach (ChartAction speedEvent in speedEvents)
+                {
+                    currentBpm = speedEvent.SpeedType == ChartSpeedType.Multiplier
+                        ? currentBpm * speedEvent.SpeedValue
+                        : speedEvent.SpeedValue * settings.Pitch / 100.0;
+                }
+            }
+
+            if (Math.Abs(angleData[floor] - MidspinAngle) >= 0.001)
+            {
+                result[floor] = currentBpm;
+            }
+        }
+
+        return result;
+    }
+
     public static IReadOnlyList<ChartFileNote> ParseNotes(string path, double macroOffsetMs)
     {
         string text = SanitizeJson(File.ReadAllText(path));

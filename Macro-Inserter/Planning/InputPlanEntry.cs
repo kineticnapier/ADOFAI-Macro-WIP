@@ -28,7 +28,8 @@ internal sealed class InputPlanEntry
         IReadOnlyList<double>? hitTargetTimeSeconds = null,
         IReadOnlyList<int>? expectedAfterSeqIds = null,
         bool isChartFileChord = false,
-        bool useInputPatchPipeline = false)
+        bool useInputPatchPipeline = false,
+        IReadOnlyList<string>? assignedKeyNames = null)
     {
         PlanStartIndex = Math.Max(0, planStartIndex);
         PlanEndIndexExclusive = Math.Max(PlanStartIndex + 1, planEndIndexExclusive);
@@ -46,6 +47,7 @@ internal sealed class InputPlanEntry
         ExpectedAfterSeqIds = expectedAfterSeqIds ?? Array.Empty<int>();
         IsChartFileChord = isChartFileChord;
         UseInputPatchPipeline = useInputPatchPipeline;
+        AssignedKeyNames = assignedKeyNames ?? Array.Empty<string>();
     }
 
     public int PlanStartIndex { get; }
@@ -83,6 +85,8 @@ internal sealed class InputPlanEntry
     public IReadOnlyList<double> HitTargetTimeSeconds { get; }
 
     public IReadOnlyList<int> ExpectedAfterSeqIds { get; }
+
+    public IReadOnlyList<string> AssignedKeyNames { get; }
 
     public bool IsPseudoChordGroup => UseInputPatchPipeline || IsChartFileChord || RawEntryCount > 1;
 

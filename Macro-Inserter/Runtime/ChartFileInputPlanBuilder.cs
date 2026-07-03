@@ -28,16 +28,39 @@ internal static class ChartFileInputPlanBuilder
         if (TryResolveCurrentChartPath(log, out string resolvedPath))
         {
             chartPath = resolvedPath;
-            log($"Runtime input-pipeline plan v24: chart path resolved but AutoPlayTiles hints are ignored. path={resolvedPath}");
+            log($"Runtime input-pipeline plan v24/v25/v26/v27/v28/v29/v30: chart path resolved but AutoPlayTiles hints are ignored. path={resolvedPath}");
         }
         else
         {
-            log("Runtime input-pipeline plan v24: current .adofai path was not found; AutoPlayTiles hints are ignored.");
+            log("Runtime input-pipeline plan v24/v25/v26/v27/v28/v29/v30: current .adofai path was not found; AutoPlayTiles hints are ignored.");
         }
 
         HashSet<int> autoSeqIds = new HashSet<int>();
+        IReadOnlyDictionary<int, double> bpmBySeqId = ReadBpmMap(chartPath, log);
         inputPlan = BuildInputPlanFromRuntimePlan(settings, log, macroPlan, autoSeqIds, chartPath);
+        inputPlan = FingeringPlanner.ApplyBeatBankFingering(inputPlan, settings.MacroKeyViewerKeysText, bpmBySeqId, log);
         return inputPlan.Count > 0;
+    }
+
+
+    private static IReadOnlyDictionary<int, double> ReadBpmMap(string? chartPath, Action<string> log)
+    {
+        if (string.IsNullOrWhiteSpace(chartPath))
+        {
+            return new Dictionary<int, double>();
+        }
+
+        try
+        {
+            IReadOnlyDictionary<int, double> bpmBySeqId = AdofaiChartFileParser.ParseBpmBySeqId(chartPath);
+            log($"Natural fingering v30: loaded chart BPM map. path={chartPath} entries={bpmBySeqId.Count}");
+            return bpmBySeqId;
+        }
+        catch (Exception ex)
+        {
+            log($"Natural fingering v30: failed to load chart BPM map; falling back to 120 BPM buckets. error={ex.GetType().Name}: {ex.Message} path={chartPath}");
+            return new Dictionary<int, double>();
+        }
     }
 
     private static IReadOnlyList<InputPlanEntry> BuildInputPlanFromRuntimePlan(
