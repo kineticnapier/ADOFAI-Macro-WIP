@@ -17,7 +17,7 @@ namespace Macro_Inserter
 {
     internal static class PseudoChordInputPlanFix
     {
-        private static readonly Harmony Harmony = new Harmony("Macro-Inserter.PseudoChordInputPlanFix.v20");
+        private static readonly Harmony Harmony = new Harmony("Macro-Inserter.PseudoChordInputPlanFix.v23");
         private static readonly FieldInfo? SettingsField = AccessTools.Field(typeof(InternalMacroService), "settings");
         private static readonly FieldInfo? LogField = AccessTools.Field(typeof(InternalMacroService), "log");
         private static readonly MethodInfo? PulseMacroKeyViewerMethod = AccessTools.Method(typeof(InternalMacroService), "PulseMacroKeyViewer");
@@ -27,6 +27,8 @@ namespace Macro_Inserter
         private static int directKeyTimesFloorAdvanceSinceSummary;
         private static int macroKeyViewerPulsesSinceSummary;
         private static double lastDirectKeyTimesSummaryRealtime;
+        private static int stuckPlainSingleSeqId = -1;
+        private static int stuckPlainSingleAttemptCount;
 
         private static bool patched;
         private static bool patchAttempted;
@@ -87,11 +89,11 @@ namespace Macro_Inserter
                 }
 
                 patched = buildPatched && firePatched;
-                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v20 installed by {reason}. buildPatched={buildPatched} firePatched={firePatched}");
+                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v23 installed by {reason}. buildPatched={buildPatched} firePatched={firePatched}");
             }
             catch (Exception ex)
             {
-                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v20 install failed: {ex}");
+                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v23 install failed: {ex}");
             }
         }
 
@@ -111,7 +113,7 @@ namespace Macro_Inserter
             {
                 // The runtime input-pipeline plan is executed through the original
                 // DirectHit branch because that is the only branch that calls
-                // TryFirePseudoChordGroup(). The v11/v12/v13/v14/v15/v17/v18/v20 prefix on that method
+                // TryFirePseudoChordGroup(). The v11/v12/v13/v14/v15/v17/v18/v20/v21/v23 prefix on that method
                 // intercepts the call and schedules InputPatchState instead of
                 // calling scrController.Hit() directly.
                 //
@@ -151,6 +153,7 @@ namespace Macro_Inserter
         private static bool TryFirePseudoChordGroupPrefix(
             InternalMacroService __instance,
             InputPlanEntry entry,
+            double clockSeconds,
             int currentFloorBefore,
             int dueCount,
             ref int currentFloorAfter,
@@ -175,7 +178,14 @@ namespace Macro_Inserter
             //   UpdateHoldKeys -> Hit(false)
             // HitInputEvent(false, Down) is still accepted by InputPatches while the
             // synthetic hit window is open.
-            bool allowDirectHitFallback =
+            //
+            // v21 tried to use Hit(false) directly for every plain single. The logs
+            // showed that it advanced currentFloor, but the game could still die
+            // around 180-degree turns because this bypasses too much of the normal
+            // keyTimes/update path. v23 keeps directKeyTimes as the primary path for
+            // every entry, and only uses DirectHit as a delayed emergency retry for a
+            // plain single that is already stuck.
+            bool plainSingle =
                 keyCount == 1 &&
                 entry.RawEntryCount == 1 &&
                 !entry.ContainsMidspin &&
@@ -185,11 +195,12 @@ namespace Macro_Inserter
                 controller,
                 keyCount,
                 forceSimulation: asyncInputActive,
-                allowDirectHitFallback: allowDirectHitFallback,
+                allowDirectHitFallback: false,
                 log);
 
             if (afterFloor >= entry.FirstSeqId)
             {
+                ResetStuckPlainSingle(entry.FirstSeqId);
                 currentFloorAfter = afterFloor;
                 PulseMacroKeyViewer(__instance, keyCount);
                 RecordDirectKeyTimesSummary(log, keyCount, currentFloorBefore, afterFloor, asyncInputActive);
@@ -197,12 +208,65 @@ namespace Macro_Inserter
                 return false;
             }
 
+            if (plainSingle)
+            {
+                int attempts = RegisterStuckPlainSingle(entry.FirstSeqId);
+                double lateMs = Math.Max(0.0, (clockSeconds - entry.FirstTargetTimeSeconds) * 1000.0);
+                if (attempts >= 3 || lateMs >= 60.0)
+                {
+                    int fallbackAfterFloor = DirectKeyTimesInputInjector.InvokeDirectHitOnly(
+                        controller,
+                        syntheticHitBudget: 2,
+                        log);
+                    log?.Invoke(
+                        $"plainSingle delayed DirectHit fallback tried. seqID={entry.FirstSeqId} attempts={attempts} lateMs={lateMs:F3} currentFloorBefore={currentFloorBefore} afterFloor={fallbackAfterFloor}");
+
+                    if (fallbackAfterFloor >= entry.FirstSeqId)
+                    {
+                        ResetStuckPlainSingle(entry.FirstSeqId);
+                        currentFloorAfter = fallbackAfterFloor;
+                        PulseMacroKeyViewer(__instance, keyCount);
+                        RecordDirectKeyTimesSummary(log, keyCount, currentFloorBefore, fallbackAfterFloor, asyncInputActive);
+                        __result = true;
+                        return false;
+                    }
+                }
+            }
+            else
+            {
+                ResetStuckPlainSingle(entry.FirstSeqId);
+            }
+
             currentFloorAfter = currentFloorBefore;
             log?.Invoke(
-                $"directKeyTimes queued; waiting for floor confirmation. keyCount={keyCount} seqID={entry.FirstSeqId}-{entry.LastSeqId} targetTime={entry.FirstTargetTimeSeconds:F6}s spanMs={entry.SpanMs:F3} rawEntryCount={entry.RawEntryCount} containsMidspin={entry.ContainsMidspin} isNearMidspin={entry.IsNearMidspin} allowDirectFallback={allowDirectHitFallback} currentFloorBefore={currentFloorBefore} currentFloorAfter={afterFloor} expectedAfter={entry.LastSeqId} dueCount={dueCount} asyncInputActive={asyncInputActive}");
+                $"directKeyTimes queued; waiting for floor confirmation. keyCount={keyCount} seqID={entry.FirstSeqId}-{entry.LastSeqId} targetTime={entry.FirstTargetTimeSeconds:F6}s spanMs={entry.SpanMs:F3} rawEntryCount={entry.RawEntryCount} containsMidspin={entry.ContainsMidspin} isNearMidspin={entry.IsNearMidspin} plainSingle={plainSingle} stuckPlainSingleAttempts={stuckPlainSingleAttemptCount} currentFloorBefore={currentFloorBefore} currentFloorAfter={afterFloor} expectedAfter={entry.LastSeqId} dueCount={dueCount} asyncInputActive={asyncInputActive}");
             __result = false;
             return false;
         }
+        private static int RegisterStuckPlainSingle(int seqId)
+        {
+            if (stuckPlainSingleSeqId == seqId)
+            {
+                stuckPlainSingleAttemptCount++;
+            }
+            else
+            {
+                stuckPlainSingleSeqId = seqId;
+                stuckPlainSingleAttemptCount = 1;
+            }
+
+            return stuckPlainSingleAttemptCount;
+        }
+
+        private static void ResetStuckPlainSingle(int seqId)
+        {
+            if (stuckPlainSingleSeqId == seqId || seqId < 0)
+            {
+                stuckPlainSingleSeqId = -1;
+                stuckPlainSingleAttemptCount = 0;
+            }
+        }
+
         private static void PulseMacroKeyViewer(InternalMacroService service, int keyCount)
         {
             if (PulseMacroKeyViewerMethod == null || keyCount <= 0)

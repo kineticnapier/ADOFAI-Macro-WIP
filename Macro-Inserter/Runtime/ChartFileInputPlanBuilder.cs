@@ -24,7 +24,18 @@ internal static class ChartFileInputPlanBuilder
             return false;
         }
 
-        HashSet<int> autoSeqIds = TryReadAutoSeqIdsFromCurrentChart(log, out string? chartPath);
+        string? chartPath = null;
+        if (TryResolveCurrentChartPath(log, out string resolvedPath))
+        {
+            chartPath = resolvedPath;
+            log($"Runtime input-pipeline plan v23: chart path resolved but AutoPlayTiles hints are ignored. path={resolvedPath}");
+        }
+        else
+        {
+            log("Runtime input-pipeline plan v23: current .adofai path was not found; AutoPlayTiles hints are ignored.");
+        }
+
+        HashSet<int> autoSeqIds = new HashSet<int>();
         inputPlan = BuildInputPlanFromRuntimePlan(settings, log, macroPlan, autoSeqIds, chartPath);
         return inputPlan.Count > 0;
     }
@@ -101,11 +112,12 @@ internal static class ChartFileInputPlanBuilder
             // - HitAutoFloors adds CountValidKeysPressed() entries into keyTimes.
             // - UpdateHoldKeys consumes keyTimes and calls Hit(false).
             // - Hit(false) itself adds one extra keyTime when the landed floor is midspin.
-            // Therefore external key count is runtime floors minus auto floors minus midspin floors.
-            // The runtime floor timestamps stay authoritative; chart data is only a best-effort
-            // source for AutoPlayTiles state.
+            // Therefore external key count is runtime floors minus midspin floors.
+            // v23 deliberately ignores chart-file AutoPlayTiles hints because those hints can
+            // remove long runtime floor ranges from the input plan even when gameplay still
+            // requires the scheduler to bridge through them.
             List<RuntimePlanItem> externalKeyItems = group
-                .Where(item => !item.IsAutoTile && !item.Entry.IsMidspin)
+                .Where(item => !item.Entry.IsMidspin)
                 .OrderBy(item => item.Entry.TargetTimeSeconds)
                 .ThenBy(item => item.Entry.SeqId)
                 .ToList();
@@ -157,7 +169,7 @@ internal static class ChartFileInputPlanBuilder
 
         string chartText = string.IsNullOrEmpty(chartPath) ? "<none>" : chartPath;
         log(
-            $"Runtime input-pipeline plan built. runtimeEntries={items.Count} inputEntries={result.Count} rawGroups={groupCount} inputPatchGroups={inputPatchGroupCount} maxRawGroupSize={maxRawGroupSize} maxKeyCount={maxKeyCount} groupingWindowMs={groupingWindowMs:F3} autoSeqIds={autoSeqIds.Count} skippedAutoMembers={skippedAutoCount} skippedNoExternalKeyGroups={skippedMidspinOnlyGroupCount} chart={chartText}");
+            $"Runtime input-pipeline plan built. runtimeEntries={items.Count} inputEntries={result.Count} rawGroups={groupCount} inputPatchGroups={inputPatchGroupCount} maxRawGroupSize={maxRawGroupSize} maxKeyCount={maxKeyCount} groupingWindowMs={groupingWindowMs:F3} autoSeqIdsIgnored={autoSeqIds.Count} skippedAutoMembers={skippedAutoCount} skippedNoExternalKeyGroups={skippedMidspinOnlyGroupCount} chart={chartText}");
         return result;
     }
 

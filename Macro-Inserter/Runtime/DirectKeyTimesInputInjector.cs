@@ -13,6 +13,36 @@ internal static class DirectKeyTimesInputInjector
     private static MethodInfo? directHitMethod;
     private static bool warnedMissingDirectHitMethod;
 
+    public static int InvokeDirectHitOnly(object? controller, int syntheticHitBudget, Action<string>? log)
+    {
+        if (controller == null)
+        {
+            log?.Invoke("plainSingleDirectHit failed: scrController instance was not found.");
+            return -1;
+        }
+
+        int beforeFloor = ReadCurrentFloorSeqId(controller);
+        ClearQueuedKeyTimes(controller, log);
+        InputPatchState.AllowSyntheticHitInputEvents(Math.Max(1, syntheticHitBudget));
+
+        if (!TryInvokeDirectHit(controller, log))
+        {
+            return ReadCurrentFloorSeqId(controller);
+        }
+
+        int afterFloor = ReadCurrentFloorSeqId(controller);
+        if (afterFloor > beforeFloor)
+        {
+            log?.Invoke($"plainSingleDirectHit advanced. beforeFloor={beforeFloor} afterFloor={afterFloor} syntheticHitBudget={Math.Max(1, syntheticHitBudget)}");
+        }
+        else
+        {
+            log?.Invoke($"plainSingleDirectHit did not advance. beforeFloor={beforeFloor} afterFloor={afterFloor} syntheticHitBudget={Math.Max(1, syntheticHitBudget)}");
+        }
+
+        return afterFloor;
+    }
+
     public static int Inject(object? controller, int keyCount, bool forceSimulation, bool allowDirectHitFallback, Action<string>? log)
     {
         if (controller == null)
