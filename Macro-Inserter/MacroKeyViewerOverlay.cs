@@ -12,6 +12,7 @@ internal sealed class MacroKeyViewerOverlay : MonoBehaviour
     private const string DefaultTextColor = "#FFFFFFFF";
     private const string DefaultPanelColor = "#000000AA";
 
+    private static readonly Dictionary<uint, Texture2D> textureCache = new();
     private static InternalMacroSettings? settings;
     private static Func<InternalMacroService?>? getService;
     private static Func<bool>? isModEnabled;
@@ -48,6 +49,19 @@ internal sealed class MacroKeyViewerOverlay : MonoBehaviour
         }
 
         DrawOverlay(macroSettings, state);
+    }
+
+    private void OnDestroy()
+    {
+        foreach (Texture2D texture in textureCache.Values)
+        {
+            if (texture != null)
+            {
+                Destroy(texture);
+            }
+        }
+
+        textureCache.Clear();
     }
 
     private static bool ShouldDraw(out InternalMacroSettings macroSettings, out MacroKeyViewerState state)
@@ -99,10 +113,13 @@ internal sealed class MacroKeyViewerOverlay : MonoBehaviour
         Color idleColor = ParseColor(macroSettings.MacroKeyViewerIdleColor, DefaultIdleColor);
         Color textColor = ParseColor(macroSettings.MacroKeyViewerTextColor, DefaultTextColor);
         Color panelColor = ParseColor(macroSettings.MacroKeyViewerPanelColor, DefaultPanelColor);
+        GUIStyle panelStyle = CreateSolidStyle(panelColor, Mathf.RoundToInt(8f * scale), margin: 0);
+        GUIStyle pressedStyle = CreateSolidStyle(pressedColor, Mathf.RoundToInt(4f * scale), margin: Mathf.RoundToInt(3f * scale));
+        GUIStyle idleStyle = CreateSolidStyle(idleColor, Mathf.RoundToInt(4f * scale), margin: Mathf.RoundToInt(3f * scale));
 
         DrawColoredRect(area, panelColor);
         GUILayout.BeginArea(area);
-        DrawKeyViewerContent(state, keys, columns, keyWidth, keyHeight, scale, pressedColor, idleColor, textColor, panelColor);
+        DrawKeyViewerContent(state, keys, columns, keyWidth, keyHeight, scale, pressedStyle, idleStyle, textColor, panelStyle);
         GUILayout.EndArea();
     }
 
@@ -122,10 +139,10 @@ internal sealed class MacroKeyViewerOverlay : MonoBehaviour
         float keyWidth,
         float keyHeight,
         float scale,
-        Color pressedColor,
-        Color idleColor,
+        GUIStyle pressedStyle,
+        GUIStyle idleStyle,
         Color textColor,
-        Color panelColor)
+        GUIStyle panelStyle)
     {
         GUIStyle titleStyle = new(GUI.skin.label)
         {
@@ -146,16 +163,16 @@ internal sealed class MacroKeyViewerOverlay : MonoBehaviour
         Color previousColor = GUI.color;
         Color previousBackground = GUI.backgroundColor;
         GUI.color = Color.white;
-        GUI.backgroundColor = panelColor;
+        GUI.backgroundColor = Color.white;
 
-        GUILayout.BeginVertical("box");
+        GUILayout.BeginVertical(panelStyle);
         GUILayout.Label($"Macro KeyViewer  KPS {state.Kps:F0}", titleStyle);
         for (int index = 0; index < keys.Count; index += columns)
         {
             GUILayout.BeginHorizontal();
             for (int column = 0; column < columns && index + column < keys.Count; column++)
             {
-                DrawMacroKey(keys[index + column], keyStyle, countStyle, keyWidth, keyHeight, pressedColor, idleColor);
+                DrawMacroKey(keys[index + column], keyStyle, countStyle, keyWidth, keyHeight, pressedStyle, idleStyle);
             }
 
             GUILayout.EndHorizontal();
@@ -172,18 +189,14 @@ internal sealed class MacroKeyViewerOverlay : MonoBehaviour
         GUIStyle countStyle,
         float width,
         float height,
-        Color pressedColor,
-        Color idleColor)
+        GUIStyle pressedStyle,
+        GUIStyle idleStyle)
     {
-        Color previousBackground = GUI.backgroundColor;
-        GUI.backgroundColor = key.Pressed ? pressedColor : idleColor;
-
-        GUILayout.BeginVertical("box", GUILayout.Width(width), GUILayout.Height(height));
+        GUIStyle keyBoxStyle = key.Pressed ? pressedStyle : idleStyle;
+        GUILayout.BeginVertical(keyBoxStyle, GUILayout.Width(width), GUILayout.Height(height));
         GUILayout.Label(key.Name, keyStyle, GUILayout.Width(width - 8f));
         GUILayout.Label(key.Count.ToString(CultureInfo.InvariantCulture), countStyle, GUILayout.Width(width - 8f));
         GUILayout.EndVertical();
-
-        GUI.backgroundColor = previousBackground;
     }
 
     private static Color ParseColor(string configuredColor, string defaultColor)
@@ -205,5 +218,55 @@ internal sealed class MacroKeyViewerOverlay : MonoBehaviour
         GUI.color = color;
         GUI.DrawTexture(rect, Texture2D.whiteTexture);
         GUI.color = previousColor;
+    }
+
+    private static GUIStyle CreateSolidStyle(Color color, int padding, int margin)
+    {
+        Texture2D texture = GetSolidTexture(color);
+        GUIStyle style = new(GUI.skin.box)
+        {
+            border = new RectOffset(0, 0, 0, 0),
+            padding = new RectOffset(padding, padding, padding, padding),
+            margin = new RectOffset(margin, margin, margin, margin)
+        };
+
+        style.normal.background = texture;
+        style.hover.background = texture;
+        style.active.background = texture;
+        style.focused.background = texture;
+        style.onNormal.background = texture;
+        style.onHover.background = texture;
+        style.onActive.background = texture;
+        style.onFocused.background = texture;
+        return style;
+    }
+
+    private static Texture2D GetSolidTexture(Color color)
+    {
+        uint key = GetColorKey(color);
+        if (textureCache.TryGetValue(key, out Texture2D texture) && texture != null)
+        {
+            return texture;
+        }
+
+        texture = new Texture2D(1, 1, TextureFormat.RGBA32, mipChain: false)
+        {
+            hideFlags = HideFlags.HideAndDontSave,
+            filterMode = FilterMode.Point,
+            wrapMode = TextureWrapMode.Clamp
+        };
+        texture.SetPixel(0, 0, color);
+        texture.Apply(updateMipmaps: false, makeNoLongerReadable: true);
+        textureCache[key] = texture;
+        return texture;
+    }
+
+    private static uint GetColorKey(Color color)
+    {
+        Color32 color32 = color;
+        return ((uint)color32.r << 24) |
+            ((uint)color32.g << 16) |
+            ((uint)color32.b << 8) |
+            color32.a;
     }
 }
