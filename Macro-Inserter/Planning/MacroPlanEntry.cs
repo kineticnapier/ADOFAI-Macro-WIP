@@ -6,12 +6,14 @@ internal sealed class MacroPlanEntry
         int seqId,
         double targetTimeSeconds,
         bool isMidspin = false,
-        bool isNearMidspin = false)
+        bool isNearMidspin = false,
+        double? angleDegrees = null)
     {
         SeqId = seqId;
         TargetTimeSeconds = targetTimeSeconds;
         IsMidspin = isMidspin;
         IsNearMidspin = isNearMidspin;
+        AngleDegrees = angleDegrees;
     }
 
     public int SeqId { get; }
@@ -21,4 +23,6 @@ internal sealed class MacroPlanEntry
     public bool IsMidspin { get; }
 
     public bool IsNearMidspin { get; }
+
+    public double? AngleDegrees { get; }
 }

@@ -18,12 +18,13 @@ namespace Macro_Inserter
 {
     internal static class PseudoChordInputPlanFix
     {
-        private const double DefaultPseudoChordWindowMs = 2.0;
-        private const double MaxMidspinChainSpanMs = 16.0;
+        private const string PatchId = "Macro-Inserter.PseudoChordInputPlanFix.v6";
+        private const double AngleEqualEpsilonDegrees = 0.001;
 
-        private static readonly Harmony Harmony = new("Macro-Inserter.PseudoChordInputPlanFix.v5");
+        private static readonly Harmony Harmony = new(PatchId);
         private static readonly FieldInfo? SettingsField = AccessTools.Field(typeof(InternalMacroService), "settings");
         private static readonly FieldInfo? LogField = AccessTools.Field(typeof(InternalMacroService), "log");
+        private static readonly FieldInfo? PlanField = AccessTools.Field(typeof(InternalMacroService), "plan");
         private static readonly FieldInfo? AdaptiveOffsetMsField = AccessTools.Field(typeof(InternalMacroService), "adaptiveOffsetMs");
         private static readonly FieldInfo? DirectHitInvokerField = AccessTools.Field(typeof(InternalMacroService), "directHitInvoker");
         private static readonly MethodInfo? TryReadCurrentFloorSeqIdMethod = AccessTools.Method(typeof(InternalMacroService), "TryReadCurrentFloorSeqId");
@@ -56,56 +57,68 @@ namespace Macro_Inserter
 
             try
             {
-                MethodInfo? buildOriginal = FindBuildInputPlanMethod();
-                MethodInfo? buildPrefix = AccessTools.Method(typeof(PseudoChordInputPlanFix), nameof(BuildInputPlanPrefix));
-                if (!buildPatched && buildOriginal != null && buildPrefix != null)
+                if (!buildPatched)
                 {
-                    Harmony.Patch(buildOriginal, prefix: new HarmonyMethod(buildPrefix));
-                    buildPatched = true;
-                }
+                    MethodInfo? buildOriginal = AccessTools.Method(
+                        typeof(InternalMacroService),
+                        "BuildInputPlan",
+                        new[] { typeof(IReadOnlyList<MacroPlanEntry>) });
+                    MethodInfo? buildPrefix = AccessTools.Method(typeof(PseudoChordInputPlanFix), nameof(BuildInputPlanPrefix));
 
-                MethodInfo? fireOriginal = FindTryFirePseudoChordGroupMethod();
-                MethodInfo? firePrefix = AccessTools.Method(typeof(PseudoChordInputPlanFix), nameof(TryFirePseudoChordGroupPrefix));
-                if (!firePatched && fireOriginal != null && firePrefix != null)
-                {
-                    Harmony.Patch(fireOriginal, prefix: new HarmonyMethod(firePrefix));
-                    firePatched = true;
+                    if (buildOriginal != null && buildPrefix != null)
+                    {
+                        Harmony.Patch(buildOriginal, prefix: new HarmonyMethod(buildPrefix));
+                        buildPatched = true;
+                    }
                 }
-
-                if (!installAttempted || buildPatched || firePatched)
-                {
-                    Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v5 installed by {reason}. buildPatched={buildPatched} firePatched={firePatched}");
-                }
-
-                installAttempted = true;
             }
             catch (Exception ex)
             {
-                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v5 install failed: {ex}");
+                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v6 build patch failed: {ex}");
             }
-        }
 
-        private static MethodInfo? FindBuildInputPlanMethod()
-        {
-            return typeof(InternalMacroService)
-                .GetMethods(BindingFlags.Instance | BindingFlags.NonPublic)
-                .FirstOrDefault(method =>
+            try
+            {
+                if (!firePatched)
                 {
-                    if (method.Name != "BuildInputPlan")
+                    MethodInfo? fireOriginal = FindTryFirePseudoChordGroupMethod();
+                    MethodInfo? firePrefix = null;
+                    int parameterCount = fireOriginal?.GetParameters().Length ?? 0;
+                    if (parameterCount == 5)
                     {
-                        return false;
+                        firePrefix = AccessTools.Method(typeof(PseudoChordInputPlanFix), nameof(TryFirePseudoChordGroupPrefixCurrent));
+                    }
+                    else if (parameterCount == 7)
+                    {
+                        firePrefix = AccessTools.Method(typeof(PseudoChordInputPlanFix), nameof(TryFirePseudoChordGroupPrefixLegacy));
                     }
 
-                    ParameterInfo[] parameters = method.GetParameters();
-                    return parameters.Length == 1;
-                });
+                    if (fireOriginal != null && firePrefix != null)
+                    {
+                        Harmony.Patch(fireOriginal, prefix: new HarmonyMethod(firePrefix));
+                        firePatched = true;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v6 fire patch failed: {ex}");
+            }
+
+            if (!installAttempted || buildPatched || firePatched)
+            {
+                installAttempted = true;
+                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v6 install by {reason}. buildPatched={buildPatched} firePatched={firePatched}");
+            }
         }
 
         private static MethodInfo? FindTryFirePseudoChordGroupMethod()
         {
             return typeof(InternalMacroService)
                 .GetMethods(BindingFlags.Instance | BindingFlags.NonPublic)
-                .FirstOrDefault(method => method.Name == "TryFirePseudoChordGroup");
+                .Where(method => method.Name == "TryFirePseudoChordGroup")
+                .OrderBy(method => method.GetParameters().Length == 5 ? 0 : 1)
+                .FirstOrDefault();
         }
 
         private static bool BuildInputPlanPrefix(
@@ -115,153 +128,255 @@ namespace Macro_Inserter
         {
             Action<string>? log = LogField?.GetValue(__instance) as Action<string>;
             InternalMacroSettings? settings = SettingsField?.GetValue(__instance) as InternalMacroSettings;
-            double chainWindowSeconds = GetWindowMs(settings) / 1000.0;
-            List<InputPlanEntry> entries = new(macroPlan.Count);
+            List<InputPlanEntry> entries = new();
+
+            if (macroPlan.Count == 0)
+            {
+                __result = Array.Empty<InputPlanEntry>();
+                return false;
+            }
+
+            double windowMs = Math.Max(0.0, settings?.PseudoChordWindowMs ?? 0.0);
+            double configuredMaxSpanMs = Math.Max(0.0, settings?.PseudoChordMaxSpanMs ?? 0.0);
+            double maxSpanMs = configuredMaxSpanMs > 0.0
+                ? Math.Min(windowMs, configuredMaxSpanMs)
+                : windowMs;
+            double exactDuplicateEpsilonMs = Math.Max(0.0, settings?.PseudoChordExactDuplicateEpsilonMs ?? 0.05);
 
             int index = 0;
-            int compressedGroups = 0;
-            int compressedRawEntries = 0;
-            int compressedEmittedHits = 0;
+            int compressedGroupCount = 0;
+            int compressedRawCount = 0;
+            int compressedHitCount = 0;
 
             while (index < macroPlan.Count)
             {
-                MacroPlanEntry first = macroPlan[index];
                 int startIndex = index;
-                int endIndex = CollectMidspinCompressionGroup(macroPlan, startIndex, chainWindowSeconds);
+                MacroPlanEntry first = macroPlan[startIndex];
+                int endIndex = startIndex + 1;
+                MacroPlanEntry last = first;
+                bool containsMidspin = first.IsMidspin;
+                bool isNearMidspin = first.IsNearMidspin;
+
+                if (windowMs > 0.0)
+                {
+                    while (endIndex < macroPlan.Count)
+                    {
+                        MacroPlanEntry candidate = macroPlan[endIndex];
+                        double spanMs = (candidate.TargetTimeSeconds - first.TargetTimeSeconds) * 1000.0;
+                        if (spanMs > windowMs)
+                        {
+                            break;
+                        }
+
+                        last = candidate;
+                        containsMidspin |= candidate.IsMidspin;
+                        isNearMidspin |= candidate.IsNearMidspin;
+                        endIndex++;
+                    }
+                }
+
                 int rawEntryCount = endIndex - startIndex;
+                double actualSpanMs = (last.TargetTimeSeconds - first.TargetTimeSeconds) * 1000.0;
+                bool validSpan = rawEntryCount > 1 && actualSpanMs <= maxSpanMs + 0.001;
+                bool shouldTryMidspinCompression = validSpan && containsMidspin;
 
-                if (rawEntryCount <= 1)
+                if (shouldTryMidspinCompression &&
+                    TryBuildMidspinCompressedEntry(
+                        macroPlan,
+                        startIndex,
+                        endIndex,
+                        exactDuplicateEpsilonMs,
+                        out InputPlanEntry? compressedEntry,
+                        out string compressionReason) &&
+                    compressedEntry != null)
                 {
-                    AddSingle(entries, startIndex, first);
-                    index++;
-                    continue;
-                }
-
-                int midspinCount = 0;
-                bool containsNearMidspin = false;
-                List<double> emittedTargetTimes = new();
-                for (int planIndex = startIndex; planIndex < endIndex; planIndex++)
-                {
-                    MacroPlanEntry candidate = macroPlan[planIndex];
-                    if (candidate.IsMidspin)
-                    {
-                        midspinCount++;
-                    }
-                    else
-                    {
-                        emittedTargetTimes.Add(candidate.TargetTimeSeconds);
-                    }
-
-                    containsNearMidspin |= candidate.IsNearMidspin;
-                }
-
-                int emittedHitCount = emittedTargetTimes.Count;
-                if (midspinCount <= 0 || emittedHitCount <= 0 || emittedHitCount >= rawEntryCount)
-                {
-                    for (int planIndex = startIndex; planIndex < endIndex; planIndex++)
-                    {
-                        AddSingle(entries, planIndex, macroPlan[planIndex]);
-                    }
-
+                    entries.Add(compressedEntry);
+                    compressedGroupCount++;
+                    compressedRawCount += compressedEntry.RawEntryCount;
+                    compressedHitCount += compressedEntry.EmittedHitCount;
+                    log?.Invoke(
+                        $"pseudoChord angle-midspin planned. groupStartIndex={startIndex} groupEndIndex={endIndex - 1} seqID={compressedEntry.FirstSeqId}-{compressedEntry.LastSeqId} rawEntryCount={compressedEntry.RawEntryCount} emittedHitCount={compressedEntry.EmittedHitCount} spanMs={compressedEntry.SpanMs:F3} reason={compressionReason}");
                     index = endIndex;
                     continue;
                 }
 
-                MacroPlanEntry last = macroPlan[endIndex - 1];
-                entries.Add(new InputPlanEntry(
-                    startIndex,
-                    endIndex,
-                    first.SeqId,
-                    last.SeqId,
-                    first.TargetTimeSeconds,
-                    last.TargetTimeSeconds,
-                    rawEntryCount,
-                    emittedHitCount,
-                    containsMidspin: true,
-                    isNearMidspin: containsNearMidspin,
-                    isExactDuplicateGroup: false,
-                    isCompressed: true,
-                    hitTargetTimeSeconds: emittedTargetTimes));
-
-                compressedGroups++;
-                compressedRawEntries += rawEntryCount;
-                compressedEmittedHits += emittedHitCount;
-                log?.Invoke(
-                    $"pseudoChord midspin-compressed planned. groupStartIndex={startIndex} groupEndIndex={endIndex - 1} firstSeqID={first.SeqId} lastSeqID={last.SeqId} rawEntryCount={rawEntryCount} midspinCount={midspinCount} emittedHitCount={emittedHitCount} spanMs={(last.TargetTimeSeconds - first.TargetTimeSeconds) * 1000.0:F3} windowMs={GetWindowMs(settings):F3}");
-
-                index = endIndex;
+                // If no safe midspin compression is available, do not keep a near-time group.
+                // Every floor remains an individual scheduler entry.
+                AddIndividualEntries(entries, macroPlan, startIndex, Math.Max(startIndex + 1, endIndex));
+                index = Math.Max(startIndex + 1, endIndex);
             }
 
             __result = entries;
             log?.Invoke(
-                $"PseudoChordInputPlanFix v5 built input plan. macroEntries={macroPlan.Count} inputEntries={entries.Count} compressedGroups={compressedGroups} compressedRawEntries={compressedRawEntries} compressedEmittedHits={compressedEmittedHits}");
+                $"PseudoChordInputPlanFix v6 built angle/midspin input plan. macroEntries={macroPlan.Count} inputEntries={entries.Count} compressedGroups={compressedGroupCount} compressedRaw={compressedRawCount} compressedHits={compressedHitCount}");
             return false;
         }
 
-        private static int CollectMidspinCompressionGroup(
+        private static bool TryBuildMidspinCompressedEntry(
             IReadOnlyList<MacroPlanEntry> macroPlan,
             int startIndex,
-            double chainWindowSeconds)
+            int endIndex,
+            double exactDuplicateEpsilonMs,
+            out InputPlanEntry? entry,
+            out string reason)
         {
+            entry = null;
+            reason = "not-compressible";
+
             MacroPlanEntry first = macroPlan[startIndex];
-            MacroPlanEntry previous = first;
-            bool containsMidspin = first.IsMidspin;
-            int index = startIndex + 1;
+            MacroPlanEntry last = macroPlan[endIndex - 1];
+            int rawEntryCount = endIndex - startIndex;
+            List<double> hitTargetTimes = new();
+            List<int> hitExpectedAfterSeqIds = new();
+            List<double> hitAngles = new();
+            int midspinCount = 0;
+            int nonMidspinCount = 0;
 
-            while (index < macroPlan.Count)
+            for (int planIndex = startIndex; planIndex < endIndex; planIndex++)
             {
-                MacroPlanEntry candidate = macroPlan[index];
-                double gapSeconds = candidate.TargetTimeSeconds - previous.TargetTimeSeconds;
-                double spanMs = (candidate.TargetTimeSeconds - first.TargetTimeSeconds) * 1000.0;
-                bool linksToMidspinRun = containsMidspin || previous.IsMidspin || candidate.IsMidspin || candidate.IsNearMidspin || previous.IsNearMidspin;
-
-                if (gapSeconds < -0.000001 || gapSeconds > chainWindowSeconds || spanMs > MaxMidspinChainSpanMs || !linksToMidspinRun)
+                MacroPlanEntry macroEntry = macroPlan[planIndex];
+                if (macroEntry.IsMidspin)
                 {
-                    break;
+                    midspinCount++;
+                    continue;
                 }
 
-                containsMidspin |= candidate.IsMidspin;
-                previous = candidate;
-                index++;
+                nonMidspinCount++;
+                hitTargetTimes.Add(macroEntry.TargetTimeSeconds);
+                hitExpectedAfterSeqIds.Add(macroEntry.SeqId);
+                hitAngles.Add(macroEntry.AngleDegrees ?? double.NaN);
             }
 
-            if (!containsMidspin)
+            if (midspinCount == 0 || nonMidspinCount == 0 || nonMidspinCount >= rawEntryCount)
             {
-                return startIndex + 1;
+                reason = $"midspinCount={midspinCount} nonMidspinCount={nonMidspinCount} rawEntryCount={rawEntryCount}";
+                return false;
             }
 
-            return index;
-        }
+            // If the last floor is a midspin marker, the final real hit may need to advance
+            // through it. Keep the emitted-hit count unchanged, but require the last hit to
+            // confirm at least the group end when possible.
+            if (last.IsMidspin && hitExpectedAfterSeqIds.Count > 0)
+            {
+                int lastIndex = hitExpectedAfterSeqIds.Count - 1;
+                hitExpectedAfterSeqIds[lastIndex] = Math.Max(hitExpectedAfterSeqIds[lastIndex], last.SeqId);
+            }
 
-        private static void AddSingle(List<InputPlanEntry> entries, int planIndex, MacroPlanEntry macroEntry)
-        {
-            entries.Add(new InputPlanEntry(
-                planIndex,
-                planIndex + 1,
-                macroEntry.SeqId,
-                macroEntry.SeqId,
-                macroEntry.TargetTimeSeconds,
-                macroEntry.TargetTimeSeconds,
-                rawEntryCount: 1,
-                emittedHitCount: 1,
-                containsMidspin: macroEntry.IsMidspin,
-                isNearMidspin: macroEntry.IsNearMidspin,
+            bool hasDifferentAnglesAtSameTime = HasDifferentAnglesAtSameTime(macroPlan, startIndex, endIndex, exactDuplicateEpsilonMs);
+            reason = hasDifferentAnglesAtSameTime
+                ? $"skip-midspin-keep-angle-slots midspinCount={midspinCount} nonMidspinCount={nonMidspinCount} differentAnglesAtSameTime=True"
+                : $"skip-midspin midspinCount={midspinCount} nonMidspinCount={nonMidspinCount}";
+
+            entry = new InputPlanEntry(
+                startIndex,
+                endIndex,
+                first.SeqId,
+                last.SeqId,
+                first.TargetTimeSeconds,
+                last.TargetTimeSeconds,
+                rawEntryCount,
+                hitTargetTimes.Count,
                 isExactDuplicateGroup: false,
-                isCompressed: false));
+                containsMidspin: true,
+                isNearMidspin: true,
+                isCompressed: true,
+                hitTargetTimeSeconds: hitTargetTimes,
+                hitExpectedAfterSeqIds: hitExpectedAfterSeqIds,
+                hitAnglesDegrees: hitAngles);
+            return true;
         }
 
-        private static double GetWindowMs(InternalMacroSettings? settings)
+        private static bool HasDifferentAnglesAtSameTime(
+            IReadOnlyList<MacroPlanEntry> macroPlan,
+            int startIndex,
+            int endIndex,
+            double exactDuplicateEpsilonMs)
         {
-            if (settings == null)
+            for (int left = startIndex; left < endIndex; left++)
             {
-                return DefaultPseudoChordWindowMs;
+                MacroPlanEntry a = macroPlan[left];
+                if (!a.AngleDegrees.HasValue)
+                {
+                    continue;
+                }
+
+                for (int right = left + 1; right < endIndex; right++)
+                {
+                    MacroPlanEntry b = macroPlan[right];
+                    if (!b.AngleDegrees.HasValue)
+                    {
+                        continue;
+                    }
+
+                    double timeDiffMs = Math.Abs(a.TargetTimeSeconds - b.TargetTimeSeconds) * 1000.0;
+                    if (timeDiffMs > exactDuplicateEpsilonMs)
+                    {
+                        continue;
+                    }
+
+                    if (Math.Abs(NormalizeAngleDelta(a.AngleDegrees.Value - b.AngleDegrees.Value)) > AngleEqualEpsilonDegrees)
+                    {
+                        return true;
+                    }
+                }
             }
 
-            double configured = Math.Max(0.0, settings.PseudoChordWindowMs);
-            return configured > 0.0 ? configured : DefaultPseudoChordWindowMs;
+            return false;
         }
 
-        private static bool TryFirePseudoChordGroupPrefix(
+        private static double NormalizeAngleDelta(double value)
+        {
+            double delta = value % 360.0;
+            if (delta > 180.0)
+            {
+                delta -= 360.0;
+            }
+            else if (delta < -180.0)
+            {
+                delta += 360.0;
+            }
+
+            return delta;
+        }
+
+        private static void AddIndividualEntries(
+            List<InputPlanEntry> entries,
+            IReadOnlyList<MacroPlanEntry> macroPlan,
+            int startIndex,
+            int endIndex)
+        {
+            for (int planIndex = startIndex; planIndex < endIndex; planIndex++)
+            {
+                MacroPlanEntry macroEntry = macroPlan[planIndex];
+                entries.Add(new InputPlanEntry(
+                    planIndex,
+                    planIndex + 1,
+                    macroEntry.SeqId,
+                    macroEntry.SeqId,
+                    macroEntry.TargetTimeSeconds,
+                    macroEntry.TargetTimeSeconds,
+                    rawEntryCount: 1,
+                    emittedHitCount: 1,
+                    isExactDuplicateGroup: false,
+                    containsMidspin: macroEntry.IsMidspin,
+                    isNearMidspin: macroEntry.IsNearMidspin,
+                    isCompressed: false));
+            }
+        }
+
+        private static bool TryFirePseudoChordGroupPrefixCurrent(
+            InternalMacroService __instance,
+            InputPlanEntry entry,
+            double clockSeconds,
+            int currentFloorBefore,
+            int dueCount,
+            ref int currentFloorAfter,
+            ref bool __result)
+        {
+            return TryFirePseudoChordGroupCore(__instance, entry, clockSeconds, currentFloorBefore, dueCount, ref currentFloorAfter, ref __result);
+        }
+
+        private static bool TryFirePseudoChordGroupPrefixLegacy(
             InternalMacroService __instance,
             InputPlanEntry entry,
             double clockSeconds,
@@ -272,69 +387,103 @@ namespace Macro_Inserter
             ref int currentFloorAfter,
             ref bool __result)
         {
-            if (!entry.IsCompressed)
-            {
-                return true;
-            }
+            return TryFirePseudoChordGroupCore(__instance, entry, clockSeconds, currentFloorBefore, dueCount, ref currentFloorAfter, ref __result);
+        }
 
-            DirectHitInvoker? directHitInvoker = DirectHitInvokerField?.GetValue(__instance) as DirectHitInvoker;
-            Action<string>? log = LogField?.GetValue(__instance) as Action<string>;
-            InternalMacroSettings? settings = SettingsField?.GetValue(__instance) as InternalMacroSettings;
-            if (directHitInvoker == null)
+        private static bool TryFirePseudoChordGroupCore(
+            InternalMacroService instance,
+            InputPlanEntry entry,
+            double clockSeconds,
+            int currentFloorBefore,
+            int dueCount,
+            ref int currentFloorAfter,
+            ref bool result)
+        {
+            DirectHitInvoker? directHitInvoker = DirectHitInvokerField?.GetValue(instance) as DirectHitInvoker;
+            Action<string>? log = LogField?.GetValue(instance) as Action<string>;
+            IReadOnlyList<MacroPlanEntry>? macroPlan = PlanField?.GetValue(instance) as IReadOnlyList<MacroPlanEntry>;
+            InternalMacroSettings? settings = SettingsField?.GetValue(instance) as InternalMacroSettings;
+            if (directHitInvoker == null || macroPlan == null)
             {
                 return true;
             }
 
             currentFloorAfter = currentFloorBefore;
             int acceptedHitCount = 0;
+            int skippedAlreadyPastHitCount = 0;
             bool completed = true;
-            double adaptiveSeconds = GetAdaptiveOffsetSeconds(settings, __instance);
+            double adaptiveSeconds = GetAdaptiveOffsetSeconds(settings, instance);
+            int emittedHitCount = Math.Max(1, entry.EmittedHitCount);
 
-            for (int hitIndex = 0; hitIndex < entry.EmittedHitCount; hitIndex++)
+            for (int hitIndex = 0; hitIndex < emittedHitCount; hitIndex++)
             {
                 int beforeFloorSeqId = currentFloorAfter;
-                if (TryReadCurrentFloorSeqId(__instance, out int verifiedBeforeFloorSeqId))
+                if (TryReadCurrentFloorSeqId(instance, out int verifiedBeforeFloorSeqId))
                 {
                     beforeFloorSeqId = verifiedBeforeFloorSeqId;
                 }
 
-                if (beforeFloorSeqId >= entry.LastSeqId)
+                currentFloorAfter = beforeFloorSeqId;
+                int expectedAfterSeqId = entry.GetHitExpectedAfterSeqId(hitIndex);
+                if (beforeFloorSeqId >= expectedAfterSeqId)
                 {
+                    skippedAlreadyPastHitCount++;
+                    continue;
+                }
+
+                if (beforeFloorSeqId < entry.FirstSeqId - 1)
+                {
+                    completed = false;
+                    log?.Invoke($"pseudoChord v6 stopped: floor not ready before group. currentFloor={beforeFloorSeqId} targetSeqID={entry.FirstSeqId}-{entry.LastSeqId} hitIndex={hitIndex} expectedAfter={expectedAfterSeqId}");
                     break;
                 }
 
                 int targetSeqId = Math.Min(beforeFloorSeqId + 1, entry.LastSeqId);
                 double hitTargetTimeSeconds = entry.GetHitTargetTimeSeconds(hitIndex) + adaptiveSeconds;
-                HitInvokeResult result = directHitInvoker.Invoke(
+                double hitAngle = entry.GetHitAngleDegrees(hitIndex);
+                HitInvokeResult hitResult = directHitInvoker.Invoke(
                     targetSeqId,
                     clockSeconds,
                     beforeFloorSeqId,
                     hitTargetTimeSeconds,
                     forceReadAfterHit: true);
-                InvokeLogHitResult(__instance, beforeFloorSeqId, result);
+                InvokeLogHitResult(instance, beforeFloorSeqId, hitResult);
 
-                currentFloorAfter = result.AfterFloorSeqId;
-                if (currentFloorAfter < 0 && TryReadCurrentFloorSeqId(__instance, out int verifiedAfterFloorSeqId))
+                currentFloorAfter = hitResult.AfterFloorSeqId;
+                if (currentFloorAfter < 0 && TryReadCurrentFloorSeqId(instance, out int verifiedAfterFloorSeqId))
                 {
                     currentFloorAfter = verifiedAfterFloorSeqId;
                 }
 
-                if (!result.Accepted)
+                if (!hitResult.Accepted)
                 {
                     completed = false;
+                    log?.Invoke($"pseudoChord v6 stopped: DirectHit rejected. hitIndex={hitIndex} targetSeqID={targetSeqId} expectedAfter={expectedAfterSeqId} angle={FormatAngle(hitAngle)} beforeFloor={beforeFloorSeqId} afterFloor={currentFloorAfter}");
                     break;
                 }
 
                 acceptedHitCount++;
-                InvokeRecordHitDiff(__instance, (clockSeconds - hitTargetTimeSeconds) * 1000.0);
-                InvokePulseMacroKeyViewer(__instance);
+                InvokeRecordHitDiff(instance, (clockSeconds - hitTargetTimeSeconds) * 1000.0);
+                InvokePulseMacroKeyViewer(instance);
+
+                if (currentFloorAfter < expectedAfterSeqId)
+                {
+                    completed = false;
+                    log?.Invoke($"pseudoChord v6 stopped: floor advance short. hitIndex={hitIndex} targetSeqID={targetSeqId} expectedAfter={expectedAfterSeqId} angle={FormatAngle(hitAngle)} beforeFloor={beforeFloorSeqId} afterFloor={currentFloorAfter}");
+                    break;
+                }
             }
 
             log?.Invoke(
-                $"pseudoChord midspin-compressed fired. groupStartIndex={entry.PlanStartIndex} groupEndIndex={entry.PlanEndIndexExclusive - 1} firstSeqID={entry.FirstSeqId} lastSeqID={entry.LastSeqId} rawEntryCount={entry.RawEntryCount} emittedHitCount={entry.EmittedHitCount} acceptedHitCount={acceptedHitCount} currentFloorBefore={currentFloorBefore} currentFloorAfter={currentFloorAfter} dueCount={dueCount} spanMs={entry.SpanMs:F3}");
+                $"pseudoChord angle-midspin fired. groupStartIndex={entry.PlanStartIndex} groupEndIndex={entry.PlanEndIndexExclusive - 1} firstSeqID={entry.FirstSeqId} lastSeqID={entry.LastSeqId} rawEntryCount={entry.RawEntryCount} emittedHitCount={entry.EmittedHitCount} acceptedHitCount={acceptedHitCount} skippedAlreadyPast={skippedAlreadyPastHitCount} currentFloorBefore={currentFloorBefore} currentFloorAfter={currentFloorAfter} dueCount={dueCount} containsMidspin={entry.ContainsMidspin} compressed={entry.IsCompressed}");
 
-            __result = completed && acceptedHitCount == entry.EmittedHitCount;
+            result = completed && (acceptedHitCount + skippedAlreadyPastHitCount >= emittedHitCount || currentFloorAfter >= entry.LastSeqId);
             return false;
+        }
+
+        private static string FormatAngle(double angle)
+        {
+            return double.IsNaN(angle) ? "<unknown>" : angle.ToString("F3");
         }
 
         private static double GetAdaptiveOffsetSeconds(InternalMacroSettings? settings, InternalMacroService instance)

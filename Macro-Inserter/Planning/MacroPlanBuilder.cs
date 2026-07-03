@@ -87,7 +87,7 @@ internal sealed class MacroPlanBuilder
                                  midspinSeqIds.Contains(entry.SeqId - 1) ||
                                  midspinSeqIds.Contains(entry.SeqId + 1);
             MacroPlanEntry filteredEntry = isNearMidspin != entry.IsNearMidspin
-                ? new MacroPlanEntry(entry.SeqId, entry.TargetTimeSeconds, entry.IsMidspin, isNearMidspin)
+                ? new MacroPlanEntry(entry.SeqId, entry.TargetTimeSeconds, entry.IsMidspin, isNearMidspin, entry.AngleDegrees)
                 : entry;
             filteredEntries.Add(filteredEntry);
             previous = filteredEntry;
@@ -108,7 +108,8 @@ internal sealed class MacroPlanBuilder
         {
             foreach (MacroPlanEntry entry in plan.Take(5))
             {
-                log($"MacroPlan preview seqID={entry.SeqId} targetTime={entry.TargetTimeSeconds:F6}s");
+                string angleText = entry.AngleDegrees.HasValue ? $" angle={entry.AngleDegrees.Value:F3}" : string.Empty;
+                log($"MacroPlan preview seqID={entry.SeqId} targetTime={entry.TargetTimeSeconds:F6}s{angleText}");
             }
         }
 
@@ -203,7 +204,7 @@ internal sealed class MacroPlanBuilder
                 return false;
             }
 
-            entry = new MacroPlanEntry(seqId, targetTimeSeconds, isMidspin);
+            entry = new MacroPlanEntry(seqId, targetTimeSeconds, isMidspin, angleDegrees: TryReadAngleDegrees(floor));
             return true;
         }
         catch
@@ -236,6 +237,12 @@ internal sealed class MacroPlanBuilder
             return true;
         }
 
+        double? angle = TryReadAngleDegrees(floor);
+        return angle.HasValue && Math.Abs(angle.Value - 999.0) < 0.001;
+    }
+
+    private static double? TryReadAngleDegrees(object floor)
+    {
         foreach (string angleName in new[] { "angle", "floorAngle", "entryAngle", "targetAngle", "targetExitAngle" })
         {
             object? rawAngle = ReflectionCache.ReadMember(floor, angleName);
@@ -246,10 +253,7 @@ internal sealed class MacroPlanBuilder
 
             try
             {
-                if (Math.Abs(Convert.ToDouble(rawAngle) - 999.0) < 0.001)
-                {
-                    return true;
-                }
+                return Convert.ToDouble(rawAngle);
             }
             catch
             {
@@ -257,6 +261,6 @@ internal sealed class MacroPlanBuilder
             }
         }
 
-        return false;
+        return null;
     }
 }
