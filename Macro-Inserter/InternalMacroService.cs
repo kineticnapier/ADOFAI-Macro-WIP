@@ -721,6 +721,13 @@ internal sealed class InternalMacroService
                 break;
             }
 
+            if (entry.IsMidspin)
+            {
+                LogVerbose($"midspin marker skipped. seqID={entry.SeqId} targetTime={effectiveTargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s currentFloor={currentFloorSeqId}");
+                nextIndex++;
+                continue;
+            }
+
             if (currentFloorSeqId == 0 && entry.SeqId == 1 && settings.FirstHitMode == FirstHitMode.Manual)
             {
                 LogFireSkip($"manual first hit waiting: currentFloor={currentFloorSeqId} targetSeqID={entry.SeqId} clockTime={clockSeconds:F6}s");
@@ -807,9 +814,7 @@ internal sealed class InternalMacroService
                 int beforeFloorSeqId = currentFloorSeqId;
                 HitInvokeResult result = directHitInvoker.Invoke(entry.SeqId, clockSeconds, beforeFloorSeqId, effectiveTargetTimeSeconds);
                 LogHitResult(currentFloorSeqId, result);
-                bool shouldConsumeDirectHit = entry.IsMidspin
-                    ? result.Accepted
-                    : result.ShouldConsume;
+                bool shouldConsumeDirectHit = result.ShouldConsume;
                 if (shouldConsumeDirectHit)
                 {
                     RecordHitDiff(diffMs);
