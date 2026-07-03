@@ -39,6 +39,7 @@ internal static class ChartFileInputPlanBuilder
                 return false;
             }
 
+            playableNotes = CalibrateNoteTimesToRuntimePlan(log, macroPlan, playableNotes, chartPath);
             inputPlan = BuildInputPlanFromNotes(settings, log, macroPlan, playableNotes, chartPath, autoSkippedCount);
             return inputPlan.Count > 0;
         }
@@ -48,6 +49,121 @@ internal static class ChartFileInputPlanBuilder
             inputPlan = Array.Empty<InputPlanEntry>();
             return false;
         }
+    }
+
+    private static List<ChartFileNote> CalibrateNoteTimesToRuntimePlan(
+        Action<string> log,
+        IReadOnlyList<MacroPlanEntry> macroPlan,
+        IReadOnlyList<ChartFileNote> notes,
+        string chartPath)
+    {
+        if (macroPlan.Count == 0 || notes.Count == 0)
+        {
+            return notes.ToList();
+        }
+
+        Dictionary<int, double> runtimeTimeBySeqId = BuildRuntimeTimeBySeqId(macroPlan);
+        List<double> offsets = new List<double>();
+        List<string> sampleTexts = new List<string>();
+        double minOffset = double.PositiveInfinity;
+        double maxOffset = double.NegativeInfinity;
+
+        foreach (ChartFileNote note in notes)
+        {
+            if (!runtimeTimeBySeqId.TryGetValue(note.SeqId, out double runtimeTimeSeconds))
+            {
+                continue;
+            }
+
+            double offsetSeconds = runtimeTimeSeconds - note.TimeSeconds;
+            if (double.IsNaN(offsetSeconds) || double.IsInfinity(offsetSeconds))
+            {
+                continue;
+            }
+
+            offsets.Add(offsetSeconds);
+            minOffset = Math.Min(minOffset, offsetSeconds);
+            maxOffset = Math.Max(maxOffset, offsetSeconds);
+            if (sampleTexts.Count < 6)
+            {
+                sampleTexts.Add($"seqID={note.SeqId}:runtime={runtimeTimeSeconds:F6}s chart={note.TimeSeconds:F6}s diffMs={offsetSeconds * 1000.0:F3}");
+            }
+
+            // Use early matching notes only. The offset should be a constant start-time
+            // baseline difference; later samples can include parser drift while this
+            // mod is still being iterated.
+            if (offsets.Count >= 128)
+            {
+                break;
+            }
+        }
+
+        if (offsets.Count == 0)
+        {
+            log($"Chart file time calibration skipped: no matching seqID between chart notes and runtime plan. path={Path.GetFileName(chartPath)}");
+            return notes.ToList();
+        }
+
+        double medianOffsetSeconds = Median(offsets);
+        double spreadMs = (maxOffset - minOffset) * 1000.0;
+        log(
+            $"Chart file time calibrated. path={Path.GetFileName(chartPath)} samples={offsets.Count} offsetMs={medianOffsetSeconds * 1000.0:F3} spreadMs={spreadMs:F3} samples=[{string.Join("; ", sampleTexts.ToArray())}]");
+
+        if (spreadMs > 25.0)
+        {
+            log($"Chart file time calibration warning: offset spread is large. spreadMs={spreadMs:F3} path={Path.GetFileName(chartPath)}");
+        }
+
+        if (Math.Abs(medianOffsetSeconds) < 0.0000005)
+        {
+            return notes.ToList();
+        }
+
+        List<ChartFileNote> calibrated = new List<ChartFileNote>(notes.Count);
+        foreach (ChartFileNote note in notes)
+        {
+            calibrated.Add(new ChartFileNote(
+                note.Index,
+                note.SeqId,
+                note.TimeSeconds + medianOffsetSeconds,
+                note.RelativeAngle,
+                note.IsAutoTile,
+                note.IsNearMidspin));
+        }
+
+        return calibrated;
+    }
+
+    private static Dictionary<int, double> BuildRuntimeTimeBySeqId(IReadOnlyList<MacroPlanEntry> macroPlan)
+    {
+        Dictionary<int, double> result = new Dictionary<int, double>();
+        for (int i = 0; i < macroPlan.Count; i++)
+        {
+            MacroPlanEntry entry = macroPlan[i];
+            if (!result.ContainsKey(entry.SeqId))
+            {
+                result[entry.SeqId] = entry.TargetTimeSeconds;
+            }
+        }
+
+        return result;
+    }
+
+    private static double Median(IReadOnlyList<double> values)
+    {
+        if (values.Count == 0)
+        {
+            return 0.0;
+        }
+
+        double[] sorted = values.OrderBy(value => value).ToArray();
+        int middle = sorted.Length / 2;
+        if (sorted.Length % 2 == 1)
+        {
+            return sorted[middle];
+        }
+
+        return (sorted[middle - 1] + sorted[middle]) / 2.0;
     }
 
     private static IReadOnlyList<InputPlanEntry> BuildInputPlanFromNotes(
