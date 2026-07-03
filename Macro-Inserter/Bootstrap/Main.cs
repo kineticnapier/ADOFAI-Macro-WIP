@@ -16,6 +16,8 @@ public static class Main
     private static string macroOffsetText = "0";
     private static string maxLateRetryMsText = "40";
     private static string maxHitsPerPlayerControlUpdateText = "8";
+    private static string pseudoChordWindowMsText = "2";
+    private static string maxHitsPerPseudoChordGroupText = "8";
     private static string virtualInputKeyCountText = "1";
     private static string macroKeyViewerPulseMsText = "80";
     private static string macroKeyViewerXText = "20";
@@ -37,6 +39,8 @@ public static class Main
         macroOffsetText = settings.MacroOffsetMs.ToString(CultureInfo.InvariantCulture);
         maxLateRetryMsText = settings.MaxLateRetryMs.ToString(CultureInfo.InvariantCulture);
         maxHitsPerPlayerControlUpdateText = settings.MaxHitsPerPlayerControlUpdate.ToString(CultureInfo.InvariantCulture);
+        pseudoChordWindowMsText = settings.PseudoChordWindowMs.ToString(CultureInfo.InvariantCulture);
+        maxHitsPerPseudoChordGroupText = settings.MaxHitsPerPseudoChordGroup.ToString(CultureInfo.InvariantCulture);
         virtualInputKeyCountText = settings.VirtualInputKeyCount.ToString(CultureInfo.InvariantCulture);
         macroKeyViewerPulseMsText = settings.MacroKeyViewerPulseMs.ToString(CultureInfo.InvariantCulture);
         macroKeyViewerXText = settings.MacroKeyViewerX.ToString(CultureInfo.InvariantCulture);
@@ -191,6 +195,24 @@ public static class Main
         if (int.TryParse(maxHitsPerPlayerControlUpdateText, NumberStyles.Integer, CultureInfo.InvariantCulture, out int maxHitsPerUpdate))
         {
             settings.MaxHitsPerPlayerControlUpdate = Math.Max(1, maxHitsPerUpdate);
+        }
+        GUILayout.EndHorizontal();
+
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("PseudoChordWindowMs", GUILayout.Width(140f));
+        pseudoChordWindowMsText = GUILayout.TextField(pseudoChordWindowMsText, GUILayout.Width(120f));
+        if (double.TryParse(pseudoChordWindowMsText, NumberStyles.Float, CultureInfo.InvariantCulture, out double pseudoChordWindowMs))
+        {
+            settings.PseudoChordWindowMs = Math.Max(0.0, pseudoChordWindowMs);
+        }
+        GUILayout.EndHorizontal();
+
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("MaxHits/PseudoChord", GUILayout.Width(140f));
+        maxHitsPerPseudoChordGroupText = GUILayout.TextField(maxHitsPerPseudoChordGroupText, GUILayout.Width(120f));
+        if (int.TryParse(maxHitsPerPseudoChordGroupText, NumberStyles.Integer, CultureInfo.InvariantCulture, out int maxHitsPerPseudoChordGroup))
+        {
+            settings.MaxHitsPerPseudoChordGroup = Math.Max(1, maxHitsPerPseudoChordGroup);
         }
         GUILayout.EndHorizontal();
 

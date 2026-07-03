@@ -18,6 +18,8 @@ public sealed class InternalMacroSettings : UnityModManager.ModSettings
     public double MaxLateRetryMs = 40.0;
     public bool EnableHighDensityMode = false;
     public int MaxHitsPerPlayerControlUpdate = 8;
+    public double PseudoChordWindowMs = 2.0;
+    public int MaxHitsPerPseudoChordGroup = 8;
     public bool ExperimentalTimeSpoofForDirectHit = false;
     public bool EnableAdaptiveOffset = false;
     public bool ValidateAfterHit = false;

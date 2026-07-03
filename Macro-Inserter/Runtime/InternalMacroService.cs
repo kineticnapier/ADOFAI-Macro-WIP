@@ -22,7 +22,6 @@ internal sealed class InternalMacroService
     private const double RestartClockBackstepSeconds = 0.5;
     private const int DueBacklogFailureMultiplier = 4;
     private const int MinDueBacklogFailureThreshold = 16;
-    private const double ChordTargetTimeThresholdSeconds = 0.0001;
 
     private readonly InternalMacroSettings settings;
     private readonly Action<string> log;
@@ -33,6 +32,7 @@ internal sealed class InternalMacroService
 
     private IReadOnlyList<MacroPlanEntry> plan = Array.Empty<MacroPlanEntry>();
     private IReadOnlyList<MacroPlanEntry> cachedPlan = Array.Empty<MacroPlanEntry>();
+    private IReadOnlyList<InputPlanEntry> inputPlan = Array.Empty<InputPlanEntry>();
     private double cachedPlanOffsetMs = double.NaN;
     private string? cachedPlanSourceKey;
     private int cachedDetectedMidspinCount;
@@ -358,6 +358,7 @@ internal sealed class InternalMacroService
         armed = false;
         running = false;
         plan = Array.Empty<MacroPlanEntry>();
+        inputPlan = Array.Empty<InputPlanEntry>();
         nextIndex = 0;
         firstInputPatchScheduled = false;
         InputPatchState.Reset();
@@ -379,6 +380,13 @@ internal sealed class InternalMacroService
             return false;
         }
 
+        inputPlan = BuildInputPlan(plan);
+        if (inputPlan.Count == 0)
+        {
+            LogStartFailure("Internal input plan is empty.");
+            return false;
+        }
+
         armed = true;
         firstInputPatchScheduled = false;
         ResetHitDiffStats();
@@ -386,8 +394,8 @@ internal sealed class InternalMacroService
         directHitInvoker.ResetRunState();
         nextIndex = 0;
         ResetMacroKeyViewer();
-        MacroPlanEntry firstEntry = plan[0];
-        log($"Scheduler armed. entries={plan.Count}, firstSeqID={firstEntry.SeqId}, firstTargetTime={firstEntry.TargetTimeSeconds:F6}s, clockMode={settings.ClockMode}, fireMode={settings.FireMode}, dryRun={settings.DryRun}");
+        InputPlanEntry firstEntry = inputPlan[0];
+        log($"Scheduler armed. macroEntries={plan.Count}, inputEntries={inputPlan.Count}, firstSeqID={firstEntry.FirstSeqId}, firstTargetTime={firstEntry.FirstTargetTimeSeconds:F6}s, clockMode={settings.ClockMode}, fireMode={settings.FireMode}, dryRun={settings.DryRun}");
         return true;
     }
 
@@ -419,6 +427,67 @@ internal sealed class InternalMacroService
         }
 
         return cachedPlan;
+    }
+
+    private IReadOnlyList<InputPlanEntry> BuildInputPlan(IReadOnlyList<MacroPlanEntry> macroPlan)
+    {
+        if (macroPlan.Count == 0)
+        {
+            return Array.Empty<InputPlanEntry>();
+        }
+
+        double windowSeconds = Math.Max(0.0, settings.PseudoChordWindowMs) / 1000.0;
+        int maxHitsPerGroup = Math.Max(1, settings.MaxHitsPerPseudoChordGroup);
+        int keyCapacity = GetPseudoChordKeyCapacity(maxHitsPerGroup);
+        List<InputPlanEntry> entries = new();
+
+        int index = 0;
+        while (index < macroPlan.Count)
+        {
+            int startIndex = index;
+            MacroPlanEntry first = macroPlan[startIndex];
+            MacroPlanEntry last = first;
+            bool containsMidspin = first.IsMidspin;
+            bool isNearMidspin = first.IsNearMidspin;
+            index++;
+
+            while (index < macroPlan.Count)
+            {
+                MacroPlanEntry candidate = macroPlan[index];
+                double deltaSeconds = Math.Abs(candidate.TargetTimeSeconds - last.TargetTimeSeconds);
+                if (deltaSeconds > windowSeconds)
+                {
+                    break;
+                }
+
+                last = candidate;
+                containsMidspin |= candidate.IsMidspin;
+                isNearMidspin |= candidate.IsNearMidspin;
+                index++;
+            }
+
+            int rawEntryCount = index - startIndex;
+            int emittedHitCount = Math.Min(rawEntryCount, Math.Min(keyCapacity, maxHitsPerGroup));
+            entries.Add(new InputPlanEntry(
+                startIndex,
+                index,
+                first.SeqId,
+                last.SeqId,
+                first.TargetTimeSeconds,
+                last.TargetTimeSeconds,
+                rawEntryCount,
+                Math.Max(1, emittedHitCount),
+                containsMidspin,
+                isNearMidspin));
+        }
+
+        return entries;
+    }
+
+    private int GetPseudoChordKeyCapacity(int fallback)
+    {
+        int viewerKeyCount = MacroKeyViewerState.ParseKeyNames(settings.MacroKeyViewerKeysText).Length;
+        return Math.Max(1, Math.Max(Math.Max(1, settings.VirtualInputKeyCount), viewerKeyCount > 0 ? viewerKeyCount : fallback));
     }
 
     private static string ReadPlanSourceKey()
@@ -489,17 +558,17 @@ internal sealed class InternalMacroService
             return false;
         }
 
-        MacroPlanEntry firstPlanEntry = plan[0];
+        InputPlanEntry firstPlanEntry = inputPlan[0];
         bool hasCurrentFloor = TryReadCurrentFloorSeqId(out int currentFloor);
-        if (hasCurrentFloor && IsStaleClockAtBeginning(clockSeconds, currentFloor, firstPlanEntry.TargetTimeSeconds))
+        if (hasCurrentFloor && IsStaleClockAtBeginning(clockSeconds, currentFloor, firstPlanEntry.FirstTargetTimeSeconds))
         {
-            LogWaitingForClockReset(clockSeconds, currentFloor, firstPlanEntry.TargetTimeSeconds);
+            LogWaitingForClockReset(clockSeconds, currentFloor, firstPlanEntry.FirstTargetTimeSeconds);
             return false;
         }
 
         if (ShouldWaitForManualFirstHit(hasCurrentFloor, currentFloor))
         {
-            LogFireSkip($"manual first hit waiting: currentFloor={currentFloor} targetSeqID={firstPlanEntry.SeqId} clockTime={clockSeconds:F6}s");
+            LogFireSkip($"manual first hit waiting: currentFloor={currentFloor} targetSeqID={firstPlanEntry.FirstSeqId} clockTime={clockSeconds:F6}s");
             return false;
         }
 
@@ -511,14 +580,14 @@ internal sealed class InternalMacroService
 
         if (ShouldWaitForInputPatchFirstHit(hasCurrentFloor, currentFloor))
         {
-            LogFireSkip($"InputPatch first hit waiting: currentFloor={currentFloor} targetSeqID={firstPlanEntry.SeqId} clockTime={clockSeconds:F6}s");
+            LogFireSkip($"InputPatch first hit waiting: currentFloor={currentFloor} targetSeqID={firstPlanEntry.FirstSeqId} clockTime={clockSeconds:F6}s");
             return false;
         }
 
         nextIndex = ResolveStartIndex(clockSeconds, hasCurrentFloor, currentFloor);
-        if (nextIndex >= plan.Count)
+        if (nextIndex >= inputPlan.Count)
         {
-            log($"Internal macro plan has no remaining entries. entries={plan.Count}, clockTime={clockSeconds:F6}s, mode={settings.ClockMode}");
+            log($"Internal input plan has no remaining entries. macroEntries={plan.Count}, inputEntries={inputPlan.Count}, clockTime={clockSeconds:F6}s, mode={settings.ClockMode}");
             armed = false;
             return false;
         }
@@ -527,9 +596,9 @@ internal sealed class InternalMacroService
         running = true;
         runningFireMode = settings.FireMode;
         runningClockMode = settings.ClockMode;
-        MacroPlanEntry firstEntry = plan[nextIndex];
+        InputPlanEntry firstEntry = inputPlan[nextIndex];
         string currentFloorText = hasCurrentFloor ? currentFloor.ToString() : "<unavailable>";
-        log($"Scheduler started. entries={plan.Count}, startIndex={nextIndex}, firstSeqID={firstEntry.SeqId}, firstTargetTime={firstEntry.TargetTimeSeconds:F6}s, clockTime={clockSeconds:F6}s, currentFloor={currentFloorText}, clockMode={settings.ClockMode}, fireMode={settings.FireMode}, dryRun={settings.DryRun}");
+        log($"Scheduler started. macroEntries={plan.Count}, inputEntries={inputPlan.Count}, startIndex={nextIndex}, firstSeqID={firstEntry.FirstSeqId}, firstTargetTime={firstEntry.FirstTargetTimeSeconds:F6}s, clockTime={clockSeconds:F6}s, currentFloor={currentFloorText}, clockMode={settings.ClockMode}, fireMode={settings.FireMode}, dryRun={settings.DryRun}");
         FireDueInputs(allowDirectHit: true, allowInputPatch: true);
         return true;
     }
@@ -555,7 +624,7 @@ internal sealed class InternalMacroService
         }
 
         int byFloor = 0;
-        while (byFloor < plan.Count && plan[byFloor].SeqId <= currentFloor)
+        while (byFloor < inputPlan.Count && inputPlan[byFloor].LastSeqId <= currentFloor)
         {
             byFloor++;
         }
@@ -569,7 +638,7 @@ internal sealed class InternalMacroService
         double lowerBound = audioSeconds - staleToleranceSeconds;
 
         int index = 0;
-        while (index < plan.Count && plan[index].TargetTimeSeconds < lowerBound)
+        while (index < inputPlan.Count && inputPlan[index].FirstTargetTimeSeconds < lowerBound)
         {
             index++;
         }
@@ -582,8 +651,8 @@ internal sealed class InternalMacroService
         return settings.FirstHitMode == FirstHitMode.Manual &&
                hasCurrentFloor &&
                currentFloor < 1 &&
-               plan.Count > 0 &&
-               plan[0].SeqId == 1;
+               inputPlan.Count > 0 &&
+               inputPlan[0].FirstSeqId == 1;
     }
 
     private bool ShouldUseInputPatchFirstHit(bool hasCurrentFloor, int currentFloor)
@@ -591,8 +660,8 @@ internal sealed class InternalMacroService
         return settings.FirstHitMode == FirstHitMode.InputPatch &&
                hasCurrentFloor &&
                currentFloor < 1 &&
-               plan.Count > 0 &&
-               plan[0].SeqId == 1 &&
+               inputPlan.Count > 0 &&
+               inputPlan[0].FirstSeqId == 1 &&
                !firstInputPatchScheduled;
     }
 
@@ -601,17 +670,17 @@ internal sealed class InternalMacroService
         return settings.FirstHitMode == FirstHitMode.InputPatch &&
                hasCurrentFloor &&
                currentFloor < 1 &&
-               plan.Count > 0 &&
-               plan[0].SeqId == 1 &&
+               inputPlan.Count > 0 &&
+               inputPlan[0].FirstSeqId == 1 &&
                firstInputPatchScheduled;
     }
 
-    private void ScheduleFirstInputPatch(double clockSeconds, int currentFloor, MacroPlanEntry firstEntry)
+    private void ScheduleFirstInputPatch(double clockSeconds, int currentFloor, InputPlanEntry firstEntry)
     {
         int virtualInputCount = Math.Max(1, settings.VirtualInputKeyCount);
         InputPatchState.BeginFrame(virtualInputCount);
         firstInputPatchScheduled = true;
-        log($"FirstHitMode InputPatch scheduled. currentFloor={currentFloor} targetSeqID={firstEntry.SeqId} targetTime={firstEntry.TargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s virtualKey={settings.VirtualInputKey} virtualKeyCount={virtualInputCount}");
+        log($"FirstHitMode InputPatch scheduled. currentFloor={currentFloor} targetSeqID={firstEntry.FirstSeqId} targetTime={firstEntry.FirstTargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s virtualKey={settings.VirtualInputKey} virtualKeyCount={virtualInputCount}");
     }
 
     private void FireDueInputsFromPlayerControlUpdate()
@@ -627,21 +696,21 @@ internal sealed class InternalMacroService
             return;
         }
 
-        string nextSeqId = nextIndex < plan.Count ? plan[nextIndex].SeqId.ToString() : "<end>";
-        string nextTargetTime = nextIndex < plan.Count ? $"{GetEffectiveTargetTimeSeconds(plan[nextIndex]):F6}s" : "<end>";
+        string nextSeqId = nextIndex < inputPlan.Count ? inputPlan[nextIndex].FirstSeqId.ToString() : "<end>";
+        string nextTargetTime = nextIndex < inputPlan.Count ? $"{GetEffectiveTargetTimeSeconds(inputPlan[nextIndex]):F6}s" : "<end>";
         int dueCount = CountDueEntries(clockSeconds);
 
-        if (nextIndex >= plan.Count)
+        if (nextIndex >= inputPlan.Count)
         {
             Stop("end of plan");
             return;
         }
 
         if (TryReadCurrentFloorSeqId(out int currentFloorSeqId) &&
-            plan.Count > 0 &&
-            IsStaleClockAtBeginning(clockSeconds, currentFloorSeqId, plan[0].TargetTimeSeconds))
+            inputPlan.Count > 0 &&
+            IsStaleClockAtBeginning(clockSeconds, currentFloorSeqId, inputPlan[0].FirstTargetTimeSeconds))
         {
-            LogFireSkip($"clock stale: currentFloor={currentFloorSeqId} firstTargetTime={plan[0].TargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s");
+            LogFireSkip($"clock stale: currentFloor={currentFloorSeqId} firstTargetTime={inputPlan[0].FirstTargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s");
             return;
         }
 
@@ -672,9 +741,10 @@ internal sealed class InternalMacroService
             dueCount = CountDueEntries(clockSeconds);
         }
 
-        while (nextIndex < plan.Count)
+        while (nextIndex < inputPlan.Count)
         {
-            MacroPlanEntry entry = plan[nextIndex];
+            InputPlanEntry inputEntry = inputPlan[nextIndex];
+            MacroPlanEntry entry = plan[inputEntry.PlanStartIndex];
             double effectiveTargetTimeSeconds = GetEffectiveTargetTimeSeconds(entry);
             if (effectiveTargetTimeSeconds > clockSeconds)
             {
@@ -688,38 +758,38 @@ internal sealed class InternalMacroService
             }
 
             double diffMs = (clockSeconds - effectiveTargetTimeSeconds) * 1000.0;
-            if (currentFloorSeqId >= entry.SeqId)
+            if (currentFloorSeqId >= inputEntry.FirstSeqId)
             {
-                string floorGuardReason = currentFloorSeqId > entry.SeqId
-                    ? "already passed target"
-                    : "already at target";
-                LogVerbose($"floorGuard skipped: {floorGuardReason}. currentFloor={currentFloorSeqId} targetSeqID={entry.SeqId}");
+                string floorGuardReason = currentFloorSeqId >= inputEntry.LastSeqId
+                    ? "already passed group"
+                    : "already inside group";
+                LogVerbose($"floorGuard skipped: {floorGuardReason}. currentFloor={currentFloorSeqId} targetSeqID={inputEntry.FirstSeqId}-{inputEntry.LastSeqId}");
                 nextIndex++;
                 continue;
             }
 
-            if (currentFloorSeqId < entry.SeqId - 1)
+            if (currentFloorSeqId < inputEntry.FirstSeqId - 1)
             {
-                LogFireSkip($"floor not ready: currentFloor={currentFloorSeqId} targetSeqID={entry.SeqId} clockTime={clockSeconds:F6}s");
+                LogFireSkip($"floor not ready: currentFloor={currentFloorSeqId} targetSeqID={inputEntry.FirstSeqId} clockTime={clockSeconds:F6}s");
                 suppressNextAdaptiveCorrection = true;
                 break;
             }
 
-            if (currentFloorSeqId == 0 && entry.SeqId == 1 && settings.FirstHitMode == FirstHitMode.Manual)
+            if (currentFloorSeqId == 0 && inputEntry.FirstSeqId == 1 && settings.FirstHitMode == FirstHitMode.Manual)
             {
-                LogFireSkip($"manual first hit waiting: currentFloor={currentFloorSeqId} targetSeqID={entry.SeqId} clockTime={clockSeconds:F6}s");
+                LogFireSkip($"manual first hit waiting: currentFloor={currentFloorSeqId} targetSeqID={inputEntry.FirstSeqId} clockTime={clockSeconds:F6}s");
                 break;
             }
 
-            if (currentFloorSeqId == 0 && entry.SeqId == 1 && settings.FirstHitMode == FirstHitMode.InputPatch)
+            if (currentFloorSeqId == 0 && inputEntry.FirstSeqId == 1 && settings.FirstHitMode == FirstHitMode.InputPatch)
             {
                 if (!firstInputPatchScheduled)
                 {
-                    ScheduleFirstInputPatch(clockSeconds, currentFloorSeqId, entry);
+                    ScheduleFirstInputPatch(clockSeconds, currentFloorSeqId, inputEntry);
                 }
                 else
                 {
-                    LogFireSkip($"InputPatch first hit waiting: currentFloor={currentFloorSeqId} targetSeqID={entry.SeqId} clockTime={clockSeconds:F6}s");
+                    LogFireSkip($"InputPatch first hit waiting: currentFloor={currentFloorSeqId} targetSeqID={inputEntry.FirstSeqId} clockTime={clockSeconds:F6}s");
                 }
 
                 break;
@@ -745,7 +815,7 @@ internal sealed class InternalMacroService
 
             if (settings.DryRun)
             {
-                LogNormal($"DryRun targetTime={effectiveTargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s diffMs={diffMs:F3} seqID={entry.SeqId} currFloorSeqID={currentFloorSeqId} clockMode={settings.ClockMode}");
+                LogNormal($"DryRun targetTime={effectiveTargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s diffMs={diffMs:F3} seqID={inputEntry.FirstSeqId}-{inputEntry.LastSeqId} rawEntryCount={inputEntry.RawEntryCount} emittedHitCount={inputEntry.EmittedHitCount} currFloorSeqID={currentFloorSeqId} clockMode={settings.ClockMode}");
                 nextIndex++;
                 break;
             }
@@ -788,52 +858,18 @@ internal sealed class InternalMacroService
                     return;
                 }
 
-                if (TryGetDirectHitChordGroup(
-                        entry,
-                        effectiveTargetTimeSeconds,
-                        clockSeconds,
-                        out int chordEndIndex,
-                        out int chordCount,
-                        out int chordTargetSeqId))
+                if (inputEntry.IsPseudoChordGroup)
                 {
-                    int beforeChordFloorSeqId = currentFloorSeqId;
-                    InputPatchState.BeginFrame(chordCount);
-                    LogVerbose($"DirectHit chord attempt: chordCount={chordCount} targetSeqID={chordTargetSeqId} groupStartIndex={nextIndex} groupEndIndex={chordEndIndex} targetTime={effectiveTargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s currentFloor={currentFloorSeqId}");
-                    HitInvokeResult chordResult = directHitInvoker.Invoke(
-                        chordTargetSeqId,
-                        clockSeconds,
-                        beforeChordFloorSeqId,
-                        effectiveTargetTimeSeconds,
-                        ignoreInputOverride: false,
-                        forceReadAfterHit: entry.IsNearMidspin);
-                    LogHitResult(currentFloorSeqId, chordResult);
-
-                    int afterChordFloorSeqId = chordResult.AfterFloorSeqId;
-                    if (afterChordFloorSeqId < 0 &&
-                        TryReadCurrentFloorSeqId(out int verifiedAfterChordFloorSeqId))
+                    if (TryFirePseudoChordGroup(inputEntry, clockSeconds, effectiveTargetTimeSeconds, diffMs, currentFloorSeqId, dueCount, out int afterGroupFloorSeqId))
                     {
-                        afterChordFloorSeqId = verifiedAfterChordFloorSeqId;
-                    }
-
-                    InputPatchState.ClearFrame();
-
-                    if (chordResult.Accepted && afterChordFloorSeqId >= chordTargetSeqId)
-                    {
-                        RecordHitDiff(diffMs);
-                        UpdateAdaptiveOffsetAfterDirectHit(diffMs, dueCount, entry);
-                        int oldNextIndex = nextIndex;
-                        int syncedNextIndex = chordEndIndex;
-
-                        if (afterChordFloorSeqId > chordTargetSeqId)
+                        UpdateAdaptiveOffsetAfterDirectHit(diffMs, Math.Max(dueCount, inputEntry.RawEntryCount), entry);
+                        nextIndex++;
+                        if (afterGroupFloorSeqId > inputEntry.LastSeqId)
                         {
-                            syncedNextIndex = AdvanceIndexPastCurrentFloor(nextIndex, afterChordFloorSeqId);
-                            LogVerbose($"scheduler synced after DirectHit chord. beforeNextIndex={oldNextIndex} chordEndIndex={chordEndIndex} afterNextIndex={syncedNextIndex} targetSeqID={chordTargetSeqId} afterFloor={afterChordFloorSeqId}");
+                            nextIndex = AdvanceIndexPastCurrentFloor(nextIndex, afterGroupFloorSeqId);
                         }
 
-                        nextIndex = syncedNextIndex;
                         hitsThisUpdate++;
-                        PulseMacroKeyViewer();
-                        LogVerbose($"DirectHit chord consumed: chordCount={chordCount} targetSeqID={chordTargetSeqId} afterFloor={afterChordFloorSeqId} nextIndex={nextIndex}");
                         if (!settings.EnableHighDensityMode)
                         {
                             break;
@@ -848,27 +884,19 @@ internal sealed class InternalMacroService
                         continue;
                     }
 
-                    LogVerbose($"DirectHit chord fallback: chordCount={chordCount} targetSeqID={chordTargetSeqId} accepted={chordResult.Accepted} afterFloor={afterChordFloorSeqId}");
-                    if (chordResult.Accepted && afterChordFloorSeqId > beforeChordFloorSeqId)
+                    LogNormal($"Hit failed; keeping nextIndex={nextIndex} seqID={inputEntry.FirstSeqId}-{inputEntry.LastSeqId}");
+                    suppressNextAdaptiveCorrection = true;
+                    if (HandleHitFailedTooLate(inputEntry, clockSeconds, diffMs, "DirectHit pseudo chord group did not complete"))
                     {
-                        RecordHitDiff(diffMs);
-                        UpdateAdaptiveOffsetAfterDirectHit(diffMs, dueCount, entry);
-                        nextIndex = AdvanceIndexPastSeq(nextIndex, chordEndIndex, afterChordFloorSeqId);
-                        hitsThisUpdate++;
-                        PulseMacroKeyViewer();
-                        if (!settings.EnableHighDensityMode)
+                        if (!running)
                         {
-                            break;
-                        }
-
-                        if (hitsThisUpdate >= maxHitsThisUpdate)
-                        {
-                            LogVerbose($"highDensity maxHitsReached hitsThisUpdate={hitsThisUpdate} maxHitsPerUpdate={maxHitsThisUpdate} nextIndex={nextIndex} dueCount={dueCount}");
-                            break;
+                            return;
                         }
 
                         continue;
                     }
+
+                    break;
                 }
 
                 int beforeFloorSeqId = currentFloorSeqId;
@@ -937,7 +965,7 @@ internal sealed class InternalMacroService
 
             int virtualInputCount = Math.Max(1, settings.VirtualInputKeyCount);
             InputPatchState.BeginFrame(virtualInputCount);
-            LogNormal($"InputPatch mode does not confirm floor advancement. scheduled count=1 virtualKey={settings.VirtualInputKey} virtualKeyCount={virtualInputCount} clockTime={clockSeconds:F6}s currFloorSeqID={currentFloorSeqId} seqID={entry.SeqId}");
+            LogNormal($"InputPatch mode does not confirm floor advancement. scheduled count=1 virtualKey={settings.VirtualInputKey} virtualKeyCount={virtualInputCount} clockTime={clockSeconds:F6}s currFloorSeqID={currentFloorSeqId} seqID={inputEntry.FirstSeqId}-{inputEntry.LastSeqId}");
             nextIndex++;
             break;
         }
@@ -957,64 +985,69 @@ internal sealed class InternalMacroService
             : 1;
     }
 
-    private bool TryGetDirectHitChordGroup(
-        MacroPlanEntry entry,
-        double effectiveTargetTimeSeconds,
+    private bool TryFirePseudoChordGroup(
+        InputPlanEntry entry,
         double clockSeconds,
-        out int groupEndIndex,
-        out int chordCount,
-        out int targetSeqId)
+        double effectiveTargetTimeSeconds,
+        double diffMs,
+        int currentFloorBefore,
+        int dueCount,
+        out int currentFloorAfter)
     {
-        groupEndIndex = nextIndex + 1;
-        chordCount = 0;
-        targetSeqId = entry.SeqId;
+        currentFloorAfter = currentFloorBefore;
+        int acceptedHitCount = 0;
+        bool completed = true;
 
-        if (entry.IsMidspin)
+        for (int hitIndex = 0; hitIndex < entry.EmittedHitCount; hitIndex++)
         {
-            return false;
-        }
+            int beforeFloorSeqId = currentFloorAfter;
+            if (!TryReadCurrentFloorSeqId(out beforeFloorSeqId))
+            {
+                beforeFloorSeqId = currentFloorAfter;
+            }
 
-        for (int index = nextIndex; index < plan.Count; index++)
-        {
-            MacroPlanEntry candidate = plan[index];
-            double candidateTargetTimeSeconds = GetEffectiveTargetTimeSeconds(candidate);
-            if (candidateTargetTimeSeconds > clockSeconds ||
-                Math.Abs(candidateTargetTimeSeconds - effectiveTargetTimeSeconds) > ChordTargetTimeThresholdSeconds)
+            if (beforeFloorSeqId >= entry.LastSeqId)
             {
                 break;
             }
 
-            groupEndIndex = index + 1;
-            if (candidate.IsMidspin)
+            int targetSeqId = Math.Min(beforeFloorSeqId + 1, entry.LastSeqId);
+            HitInvokeResult result = directHitInvoker.Invoke(
+                targetSeqId,
+                clockSeconds,
+                beforeFloorSeqId,
+                effectiveTargetTimeSeconds,
+                forceReadAfterHit: true);
+            LogHitResult(beforeFloorSeqId, result);
+
+            currentFloorAfter = result.AfterFloorSeqId;
+            if (currentFloorAfter < 0 &&
+                TryReadCurrentFloorSeqId(out int verifiedAfterFloorSeqId))
             {
-                return false;
+                currentFloorAfter = verifiedAfterFloorSeqId;
             }
 
-            if (!candidate.IsMidspin)
+            if (!result.Accepted)
             {
-                chordCount++;
-                targetSeqId = candidate.SeqId;
+                completed = false;
+                break;
             }
+
+            acceptedHitCount++;
+            RecordHitDiff(diffMs);
+            PulseMacroKeyViewer();
         }
 
-        return chordCount >= 2;
-    }
+        LogNormal(
+            $"pseudoChord compressed. groupStartIndex={entry.PlanStartIndex} groupEndIndex={entry.PlanEndIndexExclusive - 1} firstSeqID={entry.FirstSeqId} lastSeqID={entry.LastSeqId} seqID={entry.FirstSeqId}-{entry.LastSeqId} firstTargetTime={entry.FirstTargetTimeSeconds:F6}s lastTargetTime={entry.LastTargetTimeSeconds:F6}s rawEntryCount={entry.RawEntryCount} emittedHitCount={entry.EmittedHitCount} acceptedHitCount={acceptedHitCount} windowMs={settings.PseudoChordWindowMs:F3} currentFloorBefore={currentFloorBefore} currentFloorAfter={currentFloorAfter} dueCount={dueCount} containsMidspin={entry.ContainsMidspin}");
 
-    private int AdvanceIndexPastSeq(int startIndex, int endIndex, int seqId)
-    {
-        int index = startIndex;
-        while (index < endIndex && plan[index].SeqId <= seqId)
-        {
-            index++;
-        }
-
-        return index;
+        return completed && (acceptedHitCount == entry.EmittedHitCount || currentFloorAfter >= entry.LastSeqId);
     }
 
     private int AdvanceIndexPastCurrentFloor(int startIndex, int currentFloorSeqId)
     {
         int index = startIndex;
-        while (index < plan.Count && plan[index].SeqId <= currentFloorSeqId)
+        while (index < inputPlan.Count && inputPlan[index].LastSeqId <= currentFloorSeqId)
         {
             index++;
         }
@@ -1054,7 +1087,7 @@ internal sealed class InternalMacroService
         suppressNextAdaptiveCorrection = true;
         if (settings.FailureMode == FailureMode.Skip)
         {
-            int skipCount = Math.Min(dueCount - threshold, plan.Count - nextIndex);
+            int skipCount = Math.Min(dueCount - threshold, inputPlan.Count - nextIndex);
             log($"dueCount too large; skipping backlog. dueCount={dueCount} threshold={threshold} skipCount={skipCount} maxHitsPerUpdate={maxHitsThisUpdate} clockTime={clockSeconds:F6}s");
             nextIndex += skipCount;
             return true;
@@ -1069,7 +1102,7 @@ internal sealed class InternalMacroService
     {
         int count = 0;
         int index = nextIndex;
-        while (index < plan.Count && GetEffectiveTargetTimeSeconds(plan[index]) <= clockSeconds)
+        while (index < inputPlan.Count && GetEffectiveTargetTimeSeconds(inputPlan[index]) <= clockSeconds)
         {
             count++;
             index++;
@@ -1082,6 +1115,12 @@ internal sealed class InternalMacroService
     {
         double adaptiveSeconds = settings.EnableAdaptiveOffset ? adaptiveOffsetMs / 1000.0 : 0.0;
         return entry.TargetTimeSeconds + adaptiveSeconds;
+    }
+
+    private double GetEffectiveTargetTimeSeconds(InputPlanEntry entry)
+    {
+        double adaptiveSeconds = settings.EnableAdaptiveOffset ? adaptiveOffsetMs / 1000.0 : 0.0;
+        return entry.FirstTargetTimeSeconds + adaptiveSeconds;
     }
 
     private void LogHitResult(int currentFloorSeqId, HitInvokeResult result)
@@ -1182,6 +1221,26 @@ internal sealed class InternalMacroService
         }
 
         log($"tooLateStopped: reason={reason} seqID={entry.SeqId} targetTime={entry.TargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s diffMs={diffMs:F3} maxLateRetryMs={settings.MaxLateRetryMs:F3}");
+        Stop("hit failed too late");
+        return true;
+    }
+
+    private bool HandleHitFailedTooLate(InputPlanEntry entry, double clockSeconds, double diffMs, string reason)
+    {
+        if (diffMs <= settings.MaxLateRetryMs)
+        {
+            return false;
+        }
+
+        suppressNextAdaptiveCorrection = true;
+        if (settings.FailureMode == FailureMode.Skip)
+        {
+            log($"tooLateSkipped: reason={reason} seqID={entry.FirstSeqId}-{entry.LastSeqId} firstTargetTime={entry.FirstTargetTimeSeconds:F6}s lastTargetTime={entry.LastTargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s diffMs={diffMs:F3} maxLateRetryMs={settings.MaxLateRetryMs:F3}");
+            nextIndex++;
+            return true;
+        }
+
+        log($"tooLateStopped: reason={reason} seqID={entry.FirstSeqId}-{entry.LastSeqId} firstTargetTime={entry.FirstTargetTimeSeconds:F6}s lastTargetTime={entry.LastTargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s diffMs={diffMs:F3} maxLateRetryMs={settings.MaxLateRetryMs:F3}");
         Stop("hit failed too late");
         return true;
     }
