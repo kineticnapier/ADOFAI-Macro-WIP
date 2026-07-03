@@ -704,7 +704,12 @@ internal sealed class InternalMacroService
                 continue;
             }
 
-            if (!entry.IsMidspin && currentFloorSeqId < entry.SeqId - 1)
+            bool canBridgeSkippedMidspin = !entry.IsMidspin &&
+                currentFloorSeqId < entry.SeqId - 1 &&
+                CanBridgeSkippedMidspin(entry, currentFloorSeqId);
+            if (!entry.IsMidspin &&
+                currentFloorSeqId < entry.SeqId - 1 &&
+                !canBridgeSkippedMidspin)
             {
                 LogFireSkip($"floor not ready: currentFloor={currentFloorSeqId} targetSeqID={entry.SeqId} clockTime={clockSeconds:F6}s");
                 suppressNextAdaptiveCorrection = true;
@@ -719,6 +724,11 @@ internal sealed class InternalMacroService
                 }
 
                 break;
+            }
+
+            if (canBridgeSkippedMidspin)
+            {
+                LogVerbose($"floorGuard bridged skipped midspin. currentFloor={currentFloorSeqId} targetSeqID={entry.SeqId} clockTime={clockSeconds:F6}s");
             }
 
             if (entry.IsMidspin)
@@ -876,6 +886,33 @@ internal sealed class InternalMacroService
         return settings.EnableHighDensityMode
             ? Math.Max(1, settings.MaxHitsPerPlayerControlUpdate)
             : 1;
+    }
+
+    private bool CanBridgeSkippedMidspin(MacroPlanEntry entry, int currentFloorSeqId)
+    {
+        if (entry.IsMidspin)
+        {
+            return false;
+        }
+
+        if (!entry.IsNearMidspin)
+        {
+            return false;
+        }
+
+        if (currentFloorSeqId != entry.SeqId - 2)
+        {
+            return false;
+        }
+
+        if (nextIndex <= 0)
+        {
+            return false;
+        }
+
+        MacroPlanEntry previousEntry = plan[nextIndex - 1];
+        return previousEntry.IsMidspin &&
+            previousEntry.SeqId == entry.SeqId - 1;
     }
 
     private void PulseMacroKeyViewer()
