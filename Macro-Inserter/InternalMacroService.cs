@@ -122,6 +122,12 @@ internal sealed class InternalMacroService
         log($"Warmup Macro completed. planEntries={cachedPlan.Count}, detectedMidspin={cachedDetectedMidspinCount}, skippedDuplicateTime={cachedSkippedDuplicateTimeCount}, fireMode={settings.FireMode}, clockMode={settings.ClockMode}");
     }
 
+    public void ResetMacroKeyViewer()
+    {
+        macroKeyViewerHitCounter = 0;
+        MacroKeyViewer.ResetCounters();
+    }
+
     public void Tick()
     {
         if (!EnsureRunningForCurrentSettings())
@@ -377,6 +383,7 @@ internal sealed class InternalMacroService
         ResetHitDiffStats();
         ResetAdaptiveOffset();
         nextIndex = 0;
+        ResetMacroKeyViewer();
         MacroPlanEntry firstEntry = plan[0];
         log($"Scheduler armed. entries={plan.Count}, firstSeqID={firstEntry.SeqId}, firstTargetTime={firstEntry.TargetTimeSeconds:F6}s, clockMode={settings.ClockMode}, fireMode={settings.FireMode}, dryRun={settings.DryRun}");
         return true;

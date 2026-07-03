@@ -21,6 +21,10 @@ public static class Main
     private static string macroKeyViewerXText = "20";
     private static string macroKeyViewerYText = "-160";
     private static string macroKeyViewerScaleText = "1";
+    private static string macroKeyViewerPressedColorText = "#66D9FFFF";
+    private static string macroKeyViewerIdleColorText = "#202020DD";
+    private static string macroKeyViewerTextColorText = "#FFFFFFFF";
+    private static string macroKeyViewerPanelColorText = "#000000AA";
     private static bool enabled;
     private static float lastOnUpdateExceptionLogTime = -10.0f;
     private static string? lastOnUpdateExceptionSignature;
@@ -38,6 +42,14 @@ public static class Main
         macroKeyViewerXText = settings.MacroKeyViewerX.ToString(CultureInfo.InvariantCulture);
         macroKeyViewerYText = settings.MacroKeyViewerY.ToString(CultureInfo.InvariantCulture);
         macroKeyViewerScaleText = settings.MacroKeyViewerScale.ToString(CultureInfo.InvariantCulture);
+        macroKeyViewerPressedColorText = settings.MacroKeyViewerPressedColor ?? "#66D9FFFF";
+        macroKeyViewerIdleColorText = settings.MacroKeyViewerIdleColor ?? "#202020DD";
+        macroKeyViewerTextColorText = settings.MacroKeyViewerTextColor ?? "#FFFFFFFF";
+        macroKeyViewerPanelColorText = settings.MacroKeyViewerPanelColor ?? "#000000AA";
+        settings.MacroKeyViewerPressedColor = macroKeyViewerPressedColorText;
+        settings.MacroKeyViewerIdleColor = macroKeyViewerIdleColorText;
+        settings.MacroKeyViewerTextColor = macroKeyViewerTextColorText;
+        settings.MacroKeyViewerPanelColor = macroKeyViewerPanelColorText;
         service = new InternalMacroService(settings, Log);
         macroKeyViewerOverlay = MacroKeyViewerOverlay.Create(settings, () => service, () => enabled);
 
@@ -239,6 +251,35 @@ public static class Main
             settings.MacroKeyViewerScale = Mathf.Clamp(scale, 0.5f, 3.0f);
         }
         GUILayout.EndHorizontal();
+
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("MacroKeyViewerPressedColor", GUILayout.Width(180f));
+        macroKeyViewerPressedColorText = GUILayout.TextField(macroKeyViewerPressedColorText, GUILayout.Width(120f));
+        settings.MacroKeyViewerPressedColor = macroKeyViewerPressedColorText;
+        GUILayout.EndHorizontal();
+
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("MacroKeyViewerIdleColor", GUILayout.Width(180f));
+        macroKeyViewerIdleColorText = GUILayout.TextField(macroKeyViewerIdleColorText, GUILayout.Width(120f));
+        settings.MacroKeyViewerIdleColor = macroKeyViewerIdleColorText;
+        GUILayout.EndHorizontal();
+
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("MacroKeyViewerTextColor", GUILayout.Width(180f));
+        macroKeyViewerTextColorText = GUILayout.TextField(macroKeyViewerTextColorText, GUILayout.Width(120f));
+        settings.MacroKeyViewerTextColor = macroKeyViewerTextColorText;
+        GUILayout.EndHorizontal();
+
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("MacroKeyViewerPanelColor", GUILayout.Width(180f));
+        macroKeyViewerPanelColorText = GUILayout.TextField(macroKeyViewerPanelColorText, GUILayout.Width(120f));
+        settings.MacroKeyViewerPanelColor = macroKeyViewerPanelColorText;
+        GUILayout.EndHorizontal();
+
+        if (GUILayout.Button("Reset Macro KeyViewer", GUILayout.Width(180f)))
+        {
+            service?.ResetMacroKeyViewer();
+        }
 
         GUILayout.BeginHorizontal();
         GUILayout.Label("VirtualInputKey", GUILayout.Width(140f));

@@ -30,6 +30,10 @@ public sealed class InternalMacroSettings : UnityModManager.ModSettings
     public float MacroKeyViewerX = 20.0f;
     public float MacroKeyViewerY = -160.0f;
     public float MacroKeyViewerScale = 1.0f;
+    public string MacroKeyViewerPressedColor = "#66D9FFFF";
+    public string MacroKeyViewerIdleColor = "#202020DD";
+    public string MacroKeyViewerTextColor = "#FFFFFFFF";
+    public string MacroKeyViewerPanelColor = "#000000AA";
 
     public override void Save(UnityModManager.ModEntry modEntry)
     {

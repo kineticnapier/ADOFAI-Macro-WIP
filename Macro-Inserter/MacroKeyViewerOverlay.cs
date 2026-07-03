@@ -7,6 +7,11 @@ namespace Macro_Inserter;
 
 internal sealed class MacroKeyViewerOverlay : MonoBehaviour
 {
+    private const string DefaultPressedColor = "#66D9FFFF";
+    private const string DefaultIdleColor = "#202020DD";
+    private const string DefaultTextColor = "#FFFFFFFF";
+    private const string DefaultPanelColor = "#000000AA";
+
     private static InternalMacroSettings? settings;
     private static Func<InternalMacroService?>? getService;
     private static Func<bool>? isModEnabled;
@@ -90,8 +95,14 @@ internal sealed class MacroKeyViewerOverlay : MonoBehaviour
         float y = ResolveY(macroSettings.MacroKeyViewerY, height);
 
         Rect area = new(x, y, width, height);
+        Color pressedColor = ParseColor(macroSettings.MacroKeyViewerPressedColor, DefaultPressedColor);
+        Color idleColor = ParseColor(macroSettings.MacroKeyViewerIdleColor, DefaultIdleColor);
+        Color textColor = ParseColor(macroSettings.MacroKeyViewerTextColor, DefaultTextColor);
+        Color panelColor = ParseColor(macroSettings.MacroKeyViewerPanelColor, DefaultPanelColor);
+
+        DrawColoredRect(area, panelColor);
         GUILayout.BeginArea(area);
-        DrawKeyViewerContent(state, keys, columns, keyWidth, keyHeight, scale);
+        DrawKeyViewerContent(state, keys, columns, keyWidth, keyHeight, scale, pressedColor, idleColor, textColor, panelColor);
         GUILayout.EndArea();
     }
 
@@ -110,24 +121,32 @@ internal sealed class MacroKeyViewerOverlay : MonoBehaviour
         int columns,
         float keyWidth,
         float keyHeight,
-        float scale)
+        float scale,
+        Color pressedColor,
+        Color idleColor,
+        Color textColor,
+        Color panelColor)
     {
         GUIStyle titleStyle = new(GUI.skin.label)
         {
             fontSize = Mathf.Max(11, Mathf.RoundToInt(13f * scale))
         };
+        titleStyle.normal.textColor = textColor;
         GUIStyle keyStyle = new(GUI.skin.label)
         {
             fontSize = Mathf.Max(10, Mathf.RoundToInt(12f * scale))
         };
+        keyStyle.normal.textColor = textColor;
         GUIStyle countStyle = new(GUI.skin.label)
         {
             fontSize = Mathf.Max(9, Mathf.RoundToInt(10f * scale))
         };
+        countStyle.normal.textColor = textColor;
 
         Color previousColor = GUI.color;
         Color previousBackground = GUI.backgroundColor;
         GUI.color = Color.white;
+        GUI.backgroundColor = panelColor;
 
         GUILayout.BeginVertical("box");
         GUILayout.Label($"Macro KeyViewer  KPS {state.Kps:F0}", titleStyle);
@@ -136,7 +155,7 @@ internal sealed class MacroKeyViewerOverlay : MonoBehaviour
             GUILayout.BeginHorizontal();
             for (int column = 0; column < columns && index + column < keys.Count; column++)
             {
-                DrawMacroKey(keys[index + column], keyStyle, countStyle, keyWidth, keyHeight);
+                DrawMacroKey(keys[index + column], keyStyle, countStyle, keyWidth, keyHeight, pressedColor, idleColor);
             }
 
             GUILayout.EndHorizontal();
@@ -152,12 +171,12 @@ internal sealed class MacroKeyViewerOverlay : MonoBehaviour
         GUIStyle keyStyle,
         GUIStyle countStyle,
         float width,
-        float height)
+        float height,
+        Color pressedColor,
+        Color idleColor)
     {
         Color previousBackground = GUI.backgroundColor;
-        GUI.backgroundColor = key.Pressed
-            ? new Color(0.4f, 0.85f, 1.0f, 1.0f)
-            : new Color(0.35f, 0.35f, 0.35f, 0.85f);
+        GUI.backgroundColor = key.Pressed ? pressedColor : idleColor;
 
         GUILayout.BeginVertical("box", GUILayout.Width(width), GUILayout.Height(height));
         GUILayout.Label(key.Name, keyStyle, GUILayout.Width(width - 8f));
@@ -165,5 +184,26 @@ internal sealed class MacroKeyViewerOverlay : MonoBehaviour
         GUILayout.EndVertical();
 
         GUI.backgroundColor = previousBackground;
+    }
+
+    private static Color ParseColor(string configuredColor, string defaultColor)
+    {
+        configuredColor ??= string.Empty;
+        if (ColorUtility.TryParseHtmlString(configuredColor, out Color color))
+        {
+            return color;
+        }
+
+        return ColorUtility.TryParseHtmlString(defaultColor, out Color fallback)
+            ? fallback
+            : Color.white;
+    }
+
+    private static void DrawColoredRect(Rect rect, Color color)
+    {
+        Color previousColor = GUI.color;
+        GUI.color = color;
+        GUI.DrawTexture(rect, Texture2D.whiteTexture);
+        GUI.color = previousColor;
     }
 }

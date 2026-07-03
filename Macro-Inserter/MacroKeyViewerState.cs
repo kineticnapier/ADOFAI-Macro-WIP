@@ -77,6 +77,18 @@ internal sealed class MacroKeyViewerState
             .ToArray();
     }
 
+    public void ResetCounters()
+    {
+        foreach (KeySlot key in keys)
+        {
+            key.Count = 0;
+            key.PressedUntilTime = 0.0f;
+        }
+
+        recentPulseTimes.Clear();
+        Kps = 0.0f;
+    }
+
     public static string[] ParseKeyNames(string keysText)
     {
         if (string.IsNullOrWhiteSpace(keysText))
