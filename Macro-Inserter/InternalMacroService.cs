@@ -713,7 +713,7 @@ internal sealed class InternalMacroService
                 string floorGuardReason = currentFloorSeqId > entry.SeqId
                     ? "already passed target"
                     : "already at target";
-                LogNormal($"floorGuard skipped: {floorGuardReason}. currentFloor={currentFloorSeqId} targetSeqID={entry.SeqId}");
+                LogVerbose($"floorGuard skipped: {floorGuardReason}. currentFloor={currentFloorSeqId} targetSeqID={entry.SeqId}");
                 nextIndex++;
                 continue;
             }
@@ -917,7 +917,16 @@ internal sealed class InternalMacroService
                     {
                         RecordHitDiff(diffMs);
                         UpdateAdaptiveOffsetAfterDirectHit(diffMs, dueCount, entry);
-                        nextIndex = chordEndIndex;
+                        int oldNextIndex = nextIndex;
+                        int syncedNextIndex = chordEndIndex;
+
+                        if (afterChordFloorSeqId > chordTargetSeqId)
+                        {
+                            syncedNextIndex = AdvanceIndexPastCurrentFloor(nextIndex, afterChordFloorSeqId);
+                            LogVerbose($"scheduler synced after DirectHit chord. beforeNextIndex={oldNextIndex} chordEndIndex={chordEndIndex} afterNextIndex={syncedNextIndex} targetSeqID={chordTargetSeqId} afterFloor={afterChordFloorSeqId}");
+                        }
+
+                        nextIndex = syncedNextIndex;
                         hitsThisUpdate++;
                         PulseMacroKeyViewer();
                         LogVerbose($"DirectHit chord consumed: chordCount={chordCount} targetSeqID={chordTargetSeqId} afterFloor={afterChordFloorSeqId} nextIndex={nextIndex}");
@@ -966,7 +975,17 @@ internal sealed class InternalMacroService
                 {
                     RecordHitDiff(diffMs);
                     UpdateAdaptiveOffsetAfterDirectHit(diffMs, dueCount, entry);
-                    nextIndex++;
+                    int oldNextIndex = nextIndex;
+                    int syncedNextIndex = nextIndex + 1;
+
+                    if (TryReadCurrentFloorSeqId(out int afterFloorSeqId) &&
+                        afterFloorSeqId > entry.SeqId)
+                    {
+                        syncedNextIndex = AdvanceIndexPastCurrentFloor(nextIndex, afterFloorSeqId);
+                        LogVerbose($"scheduler synced after DirectHit. beforeNextIndex={oldNextIndex} afterNextIndex={syncedNextIndex} targetSeqID={entry.SeqId} afterFloor={afterFloorSeqId}");
+                    }
+
+                    nextIndex = syncedNextIndex;
                     hitsThisUpdate++;
                     PulseMacroKeyViewer();
                     if (!settings.EnableHighDensityMode)
@@ -1100,6 +1119,17 @@ internal sealed class InternalMacroService
     {
         int index = startIndex;
         while (index < endIndex && plan[index].SeqId <= seqId)
+        {
+            index++;
+        }
+
+        return index;
+    }
+
+    private int AdvanceIndexPastCurrentFloor(int startIndex, int currentFloorSeqId)
+    {
+        int index = startIndex;
+        while (index < plan.Count && plan[index].SeqId <= currentFloorSeqId)
         {
             index++;
         }
