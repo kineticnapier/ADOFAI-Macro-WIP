@@ -59,7 +59,8 @@ internal sealed class DirectHitInvoker
         double audioTime,
         int beforeFloorSeqId,
         double targetTimeSeconds,
-        bool? ignoreInputOverride = null)
+        bool? ignoreInputOverride = null,
+        bool forceReadAfterHit = false)
     {
         object? controller = ReflectionCache.GetSingletonInstance("scrController");
         if (controller == null)
@@ -87,7 +88,7 @@ internal sealed class DirectHitInvoker
         {
             LogInvalidFloorIfNeeded(seqId, audioTime);
             LogNormal($"DirectHit threw {ex.GetType().Name}. seqID={seqId} audioTime={audioTime:F6}s.");
-            return CreateResult(false, beforeFloorSeqId, ReadCurrentFloorSeqIdIfNeeded(), seqId);
+            return CreateResult(false, beforeFloorSeqId, ReadCurrentFloorSeqIdIfNeeded(forceReadAfterHit), seqId);
         }
         finally
         {
@@ -103,7 +104,7 @@ internal sealed class DirectHitInvoker
                 LogNormal($"DirectHit failed. seqID={seqId} audioTime={audioTime:F6}s.");
             }
 
-            if (!settings.ValidateAfterHit)
+            if (!settings.ValidateAfterHit && !forceReadAfterHit)
             {
                 return new HitInvokeResult(
                     accepted,
@@ -115,10 +116,10 @@ internal sealed class DirectHitInvoker
                     seqId);
             }
 
-            return CreateResult(accepted, beforeFloorSeqId, ReadCurrentFloorSeqIdIfNeeded(), seqId);
+            return CreateResult(accepted, beforeFloorSeqId, ReadCurrentFloorSeqIdIfNeeded(forceReadAfterHit), seqId);
         }
 
-        return CreateResult(false, beforeFloorSeqId, ReadCurrentFloorSeqIdIfNeeded(), seqId);
+        return CreateResult(false, beforeFloorSeqId, ReadCurrentFloorSeqIdIfNeeded(forceReadAfterHit), seqId);
     }
 
     private TimeSpoofState? BeginTimeSpoof(double targetTimeSeconds)
@@ -347,9 +348,9 @@ internal sealed class DirectHitInvoker
             targetSeqId);
     }
 
-    private int ReadCurrentFloorSeqIdIfNeeded()
+    private int ReadCurrentFloorSeqIdIfNeeded(bool forceReadAfterHit = false)
     {
-        return settings.ValidateAfterHit ? ReadCurrentFloorSeqId() : -1;
+        return settings.ValidateAfterHit || forceReadAfterHit ? ReadCurrentFloorSeqId() : -1;
     }
 
     private static int ReadCurrentFloorSeqId()

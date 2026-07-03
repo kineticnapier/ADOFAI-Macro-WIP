@@ -688,19 +688,6 @@ internal sealed class InternalMacroService
             }
 
             double diffMs = (clockSeconds - effectiveTargetTimeSeconds) * 1000.0;
-            if (entry.IsMidspin)
-            {
-                if (currentFloorSeqId < entry.SeqId)
-                {
-                    LogFireSkip($"midspin not ready: currentFloor={currentFloorSeqId} targetSeqID={entry.SeqId} clockTime={clockSeconds:F6}s");
-                    break;
-                }
-
-                LogVerbose($"midspin marker skipped. seqID={entry.SeqId} targetTime={effectiveTargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s currentFloor={currentFloorSeqId}");
-                nextIndex++;
-                continue;
-            }
-
             if (currentFloorSeqId >= entry.SeqId)
             {
                 string floorGuardReason = currentFloorSeqId > entry.SeqId
@@ -817,7 +804,8 @@ internal sealed class InternalMacroService
                         clockSeconds,
                         beforeChordFloorSeqId,
                         effectiveTargetTimeSeconds,
-                        ignoreInputOverride: false);
+                        ignoreInputOverride: false,
+                        forceReadAfterHit: entry.IsNearMidspin);
                     LogHitResult(currentFloorSeqId, chordResult);
 
                     int afterChordFloorSeqId = chordResult.AfterFloorSeqId;
@@ -884,7 +872,12 @@ internal sealed class InternalMacroService
                 }
 
                 int beforeFloorSeqId = currentFloorSeqId;
-                HitInvokeResult result = directHitInvoker.Invoke(entry.SeqId, clockSeconds, beforeFloorSeqId, effectiveTargetTimeSeconds);
+                HitInvokeResult result = directHitInvoker.Invoke(
+                    entry.SeqId,
+                    clockSeconds,
+                    beforeFloorSeqId,
+                    effectiveTargetTimeSeconds,
+                    forceReadAfterHit: entry.IsMidspin || entry.IsNearMidspin);
                 LogHitResult(currentFloorSeqId, result);
                 int afterFloorSeqId = result.AfterFloorSeqId;
                 if (afterFloorSeqId < 0 &&
@@ -898,16 +891,7 @@ internal sealed class InternalMacroService
                 {
                     RecordHitDiff(diffMs);
                     UpdateAdaptiveOffsetAfterDirectHit(diffMs, dueCount, entry);
-                    int oldNextIndex = nextIndex;
-                    int syncedNextIndex = nextIndex + 1;
-
-                    if (afterFloorSeqId > entry.SeqId)
-                    {
-                        syncedNextIndex = AdvanceIndexPastCurrentFloor(nextIndex, afterFloorSeqId);
-                        LogVerbose($"scheduler synced after DirectHit. beforeNextIndex={oldNextIndex} afterNextIndex={syncedNextIndex} targetSeqID={entry.SeqId} afterFloor={afterFloorSeqId}");
-                    }
-
-                    nextIndex = syncedNextIndex;
+                    nextIndex++;
                     hitsThisUpdate++;
                     PulseMacroKeyViewer();
                     if (!settings.EnableHighDensityMode)
