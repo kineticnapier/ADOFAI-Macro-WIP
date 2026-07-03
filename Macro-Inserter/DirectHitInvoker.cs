@@ -24,7 +24,12 @@ internal sealed class DirectHitInvoker
         ReflectionCache.WarmupMembers("scrConductor", "songposition", "songposition_minusi");
     }
 
-    public HitInvokeResult Invoke(int seqId, double audioTime, int beforeFloorSeqId, double targetTimeSeconds)
+    public HitInvokeResult Invoke(
+        int seqId,
+        double audioTime,
+        int beforeFloorSeqId,
+        double targetTimeSeconds,
+        bool? ignoreInputOverride = null)
     {
         object? controller = ReflectionCache.GetSingletonInstance("scrController");
         if (controller == null)
@@ -42,10 +47,11 @@ internal sealed class DirectHitInvoker
 
         object? result;
         TimeSpoofState? timeSpoofState = null;
+        bool ignoreInput = ignoreInputOverride ?? settings.DirectHitIgnoreInput;
         try
         {
             timeSpoofState = BeginTimeSpoof(targetTimeSeconds);
-            result = hitMethod.Invoke(controller, new object[] { settings.DirectHitIgnoreInput });
+            result = hitMethod.Invoke(controller, new object[] { ignoreInput });
         }
         catch (Exception ex)
         {
@@ -60,7 +66,7 @@ internal sealed class DirectHitInvoker
 
         if (result is bool accepted)
         {
-            LogVerbose($"DirectHit result={accepted} ignoreInput={settings.DirectHitIgnoreInput} seqID={seqId} audioTime={audioTime:F6}s");
+            LogVerbose($"DirectHit result={accepted} ignoreInput={ignoreInput} seqID={seqId} audioTime={audioTime:F6}s");
             if (!accepted)
             {
                 LogInvalidFloorIfNeeded(seqId, audioTime);

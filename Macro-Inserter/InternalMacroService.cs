@@ -22,6 +22,7 @@ internal sealed class InternalMacroService
     private const double RestartClockBackstepSeconds = 0.5;
     private const int DueBacklogFailureMultiplier = 4;
     private const int MinDueBacklogFailureThreshold = 16;
+    private const double ChordTargetTimeThresholdSeconds = 0.0001;
 
     private readonly InternalMacroSettings settings;
     private readonly Action<string> log;
@@ -821,6 +822,79 @@ internal sealed class InternalMacroService
                     return;
                 }
 
+                if (TryGetDirectHitChordGroup(
+                        entry,
+                        effectiveTargetTimeSeconds,
+                        clockSeconds,
+                        out int chordEndIndex,
+                        out int chordCount,
+                        out int chordTargetSeqId))
+                {
+                    int beforeChordFloorSeqId = currentFloorSeqId;
+                    InputPatchState.BeginFrame(chordCount);
+                    LogVerbose($"DirectHit chord attempt: chordCount={chordCount} targetSeqID={chordTargetSeqId} groupStartIndex={nextIndex} groupEndIndex={chordEndIndex} targetTime={effectiveTargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s currentFloor={currentFloorSeqId}");
+                    HitInvokeResult chordResult = directHitInvoker.Invoke(
+                        chordTargetSeqId,
+                        clockSeconds,
+                        beforeChordFloorSeqId,
+                        effectiveTargetTimeSeconds,
+                        ignoreInputOverride: false);
+                    LogHitResult(currentFloorSeqId, chordResult);
+
+                    int afterChordFloorSeqId = chordResult.AfterFloorSeqId;
+                    if (afterChordFloorSeqId < 0 &&
+                        TryReadCurrentFloorSeqId(out int verifiedAfterChordFloorSeqId))
+                    {
+                        afterChordFloorSeqId = verifiedAfterChordFloorSeqId;
+                    }
+
+                    InputPatchState.ClearFrame();
+
+                    if (chordResult.Accepted && afterChordFloorSeqId >= chordTargetSeqId)
+                    {
+                        RecordHitDiff(diffMs);
+                        UpdateAdaptiveOffsetAfterDirectHit(diffMs, dueCount, entry);
+                        nextIndex = chordEndIndex;
+                        hitsThisUpdate++;
+                        PulseMacroKeyViewer();
+                        LogVerbose($"DirectHit chord consumed: chordCount={chordCount} targetSeqID={chordTargetSeqId} afterFloor={afterChordFloorSeqId} nextIndex={nextIndex}");
+                        if (!settings.EnableHighDensityMode)
+                        {
+                            break;
+                        }
+
+                        if (hitsThisUpdate >= maxHitsThisUpdate)
+                        {
+                            LogVerbose($"highDensity maxHitsReached hitsThisUpdate={hitsThisUpdate} maxHitsPerUpdate={maxHitsThisUpdate} nextIndex={nextIndex} dueCount={dueCount}");
+                            break;
+                        }
+
+                        continue;
+                    }
+
+                    LogVerbose($"DirectHit chord fallback: chordCount={chordCount} targetSeqID={chordTargetSeqId} accepted={chordResult.Accepted} afterFloor={afterChordFloorSeqId}");
+                    if (chordResult.Accepted && afterChordFloorSeqId > beforeChordFloorSeqId)
+                    {
+                        RecordHitDiff(diffMs);
+                        UpdateAdaptiveOffsetAfterDirectHit(diffMs, dueCount, entry);
+                        nextIndex = AdvanceIndexPastSeq(nextIndex, chordEndIndex, afterChordFloorSeqId);
+                        hitsThisUpdate++;
+                        PulseMacroKeyViewer();
+                        if (!settings.EnableHighDensityMode)
+                        {
+                            break;
+                        }
+
+                        if (hitsThisUpdate >= maxHitsThisUpdate)
+                        {
+                            LogVerbose($"highDensity maxHitsReached hitsThisUpdate={hitsThisUpdate} maxHitsPerUpdate={maxHitsThisUpdate} nextIndex={nextIndex} dueCount={dueCount}");
+                            break;
+                        }
+
+                        continue;
+                    }
+                }
+
                 int beforeFloorSeqId = currentFloorSeqId;
                 HitInvokeResult result = directHitInvoker.Invoke(entry.SeqId, clockSeconds, beforeFloorSeqId, effectiveTargetTimeSeconds);
                 LogHitResult(currentFloorSeqId, result);
@@ -913,6 +987,50 @@ internal sealed class InternalMacroService
         MacroPlanEntry previousEntry = plan[nextIndex - 1];
         return previousEntry.IsMidspin &&
             previousEntry.SeqId == entry.SeqId - 1;
+    }
+
+    private bool TryGetDirectHitChordGroup(
+        MacroPlanEntry entry,
+        double effectiveTargetTimeSeconds,
+        double clockSeconds,
+        out int groupEndIndex,
+        out int chordCount,
+        out int targetSeqId)
+    {
+        groupEndIndex = nextIndex + 1;
+        chordCount = 0;
+        targetSeqId = entry.SeqId;
+
+        for (int index = nextIndex; index < plan.Count; index++)
+        {
+            MacroPlanEntry candidate = plan[index];
+            double candidateTargetTimeSeconds = GetEffectiveTargetTimeSeconds(candidate);
+            if (candidateTargetTimeSeconds > clockSeconds ||
+                Math.Abs(candidateTargetTimeSeconds - effectiveTargetTimeSeconds) > ChordTargetTimeThresholdSeconds)
+            {
+                break;
+            }
+
+            groupEndIndex = index + 1;
+            if (!candidate.IsMidspin)
+            {
+                chordCount++;
+                targetSeqId = candidate.SeqId;
+            }
+        }
+
+        return chordCount >= 2;
+    }
+
+    private int AdvanceIndexPastSeq(int startIndex, int endIndex, int seqId)
+    {
+        int index = startIndex;
+        while (index < endIndex && plan[index].SeqId <= seqId)
+        {
+            index++;
+        }
+
+        return index;
     }
 
     private void PulseMacroKeyViewer()
