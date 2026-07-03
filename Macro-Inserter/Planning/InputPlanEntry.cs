@@ -7,9 +7,9 @@ internal sealed class InputPlanEntry
 {
     static InputPlanEntry()
     {
-        // RuntimeInitializeOnLoadMethod is not always reliable for UMM-loaded assemblies.
-        // This guarantees the compatibility patch is installed as soon as the scheduler
-        // starts constructing input-plan entries.
+        // Backup install path. The primary path is ModuleInitializer in
+        // PseudoChordInputPlanFix, but this keeps the patch alive even if the
+        // runtime skips RuntimeInitializeOnLoadMethod for UMM-loaded assemblies.
         PseudoChordInputPlanFix.Install("InputPlanEntry static constructor");
     }
 
@@ -35,16 +35,7 @@ internal sealed class InputPlanEntry
         FirstTargetTimeSeconds = firstTargetTimeSeconds;
         LastTargetTimeSeconds = lastTargetTimeSeconds;
         RawEntryCount = Math.Max(1, rawEntryCount);
-
-        // Safety: gameplay must never emit fewer hits than floors unless a caller
-        // explicitly marks the entry as compressed. The old BuildInputPlan creates
-        // pseudoChord groups with isCompressed=false, so this prevents it from
-        // silently skipping floors when the runtime patch was installed too late
-        // for the current BuildInputPlan call.
-        EmittedHitCount = isCompressed
-            ? Math.Max(1, emittedHitCount)
-            : Math.Max(1, RawEntryCount);
-
+        EmittedHitCount = Math.Max(1, emittedHitCount);
         ContainsMidspin = containsMidspin;
         IsNearMidspin = isNearMidspin;
         IsExactDuplicateGroup = isExactDuplicateGroup;
@@ -80,10 +71,7 @@ internal sealed class InputPlanEntry
 
     public IReadOnlyList<double> HitTargetTimeSeconds { get; }
 
-    // Compatibility fallback: if the original InternalMacroService creates a
-    // grouped entry before our BuildInputPlan prefix is active, keep the grouped
-    // firing path enabled so every floor in that group can still be hit.
-    public bool IsPseudoChordGroup => RawEntryCount > 1;
+    public bool IsPseudoChordGroup => IsCompressed && RawEntryCount > 1;
 
     public double GetHitTargetTimeSeconds(int hitIndex)
     {
@@ -92,7 +80,7 @@ internal sealed class InputPlanEntry
             return FirstTargetTimeSeconds;
         }
 
-        if (hitIndex < 0)
+        if (hitIndex <= 0)
         {
             return HitTargetTimeSeconds[0];
         }
