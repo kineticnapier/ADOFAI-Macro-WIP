@@ -436,7 +436,12 @@ internal sealed class InternalMacroService
             return Array.Empty<InputPlanEntry>();
         }
 
-        double windowSeconds = Math.Max(0.0, settings.PseudoChordWindowMs) / 1000.0;
+        double windowMs = Math.Max(0.0, settings.PseudoChordWindowMs);
+        double configuredMaxSpanMs = Math.Max(0.0, settings.PseudoChordMaxSpanMs);
+        double maxSpanMs = configuredMaxSpanMs > 0.0
+            ? Math.Min(windowMs, configuredMaxSpanMs)
+            : windowMs;
+        double exactDuplicateEpsilonMs = Math.Max(0.0, settings.PseudoChordExactDuplicateEpsilonMs);
         int maxHitsPerGroup = Math.Max(1, settings.MaxHitsPerPseudoChordGroup);
         int keyCapacity = GetPseudoChordKeyCapacity(maxHitsPerGroup);
         List<InputPlanEntry> entries = new();
@@ -446,6 +451,7 @@ internal sealed class InternalMacroService
         {
             int startIndex = index;
             MacroPlanEntry first = macroPlan[startIndex];
+            double firstTargetTimeSeconds = first.TargetTimeSeconds;
             MacroPlanEntry last = first;
             bool containsMidspin = first.IsMidspin;
             bool isNearMidspin = first.IsNearMidspin;
@@ -454,8 +460,9 @@ internal sealed class InternalMacroService
             while (index < macroPlan.Count)
             {
                 MacroPlanEntry candidate = macroPlan[index];
-                double deltaSeconds = Math.Abs(candidate.TargetTimeSeconds - last.TargetTimeSeconds);
-                if (deltaSeconds > windowSeconds)
+                double spanMs = (candidate.TargetTimeSeconds - firstTargetTimeSeconds) * 1000.0;
+                bool isExactDuplicate = Math.Abs(spanMs) <= exactDuplicateEpsilonMs;
+                if (!isExactDuplicate && spanMs > windowMs)
                 {
                     break;
                 }
@@ -467,6 +474,18 @@ internal sealed class InternalMacroService
             }
 
             int rawEntryCount = index - startIndex;
+            double actualSpanMs = (last.TargetTimeSeconds - firstTargetTimeSeconds) * 1000.0;
+            if (rawEntryCount > 1 && actualSpanMs > maxSpanMs + 0.001)
+            {
+                LogNormal($"pseudoChord rejected: span exceeds window. groupStartIndex={startIndex} groupEndIndex={index - 1} firstSeqID={first.SeqId} lastSeqID={last.SeqId} spanMs={actualSpanMs:F3} windowMs={windowMs:F3} maxSpanMs={maxSpanMs:F3}");
+                index = startIndex + 1;
+                last = first;
+                containsMidspin = first.IsMidspin;
+                isNearMidspin = first.IsNearMidspin;
+                rawEntryCount = 1;
+                actualSpanMs = 0.0;
+            }
+
             int emittedHitCount = Math.Min(rawEntryCount, Math.Min(keyCapacity, maxHitsPerGroup));
             entries.Add(new InputPlanEntry(
                 startIndex,
@@ -1039,7 +1058,7 @@ internal sealed class InternalMacroService
         }
 
         LogNormal(
-            $"pseudoChord compressed. groupStartIndex={entry.PlanStartIndex} groupEndIndex={entry.PlanEndIndexExclusive - 1} firstSeqID={entry.FirstSeqId} lastSeqID={entry.LastSeqId} seqID={entry.FirstSeqId}-{entry.LastSeqId} firstTargetTime={entry.FirstTargetTimeSeconds:F6}s lastTargetTime={entry.LastTargetTimeSeconds:F6}s rawEntryCount={entry.RawEntryCount} emittedHitCount={entry.EmittedHitCount} acceptedHitCount={acceptedHitCount} windowMs={settings.PseudoChordWindowMs:F3} currentFloorBefore={currentFloorBefore} currentFloorAfter={currentFloorAfter} dueCount={dueCount} containsMidspin={entry.ContainsMidspin}");
+            $"pseudoChord compressed. groupStartIndex={entry.PlanStartIndex} groupEndIndex={entry.PlanEndIndexExclusive - 1} firstSeqID={entry.FirstSeqId} lastSeqID={entry.LastSeqId} seqID={entry.FirstSeqId}-{entry.LastSeqId} firstTargetTime={entry.FirstTargetTimeSeconds:F6}s lastTargetTime={entry.LastTargetTimeSeconds:F6}s rawEntryCount={entry.RawEntryCount} emittedHitCount={entry.EmittedHitCount} acceptedHitCount={acceptedHitCount} windowMs={settings.PseudoChordWindowMs:F3} spanMs={entry.SpanMs:F3} currentFloorBefore={currentFloorBefore} currentFloorAfter={currentFloorAfter} dueCount={dueCount} containsMidspin={entry.ContainsMidspin}");
 
         return completed && (acceptedHitCount == entry.EmittedHitCount || currentFloorAfter >= entry.LastSeqId);
     }

@@ -38,6 +38,8 @@ internal sealed class InputPlanEntry
 
     public double LastTargetTimeSeconds { get; }
 
+    public double SpanMs => (LastTargetTimeSeconds - FirstTargetTimeSeconds) * 1000.0;
+
     public int RawEntryCount { get; }
 
     public int EmittedHitCount { get; }

@@ -17,6 +17,8 @@ public static class Main
     private static string maxLateRetryMsText = "40";
     private static string maxHitsPerPlayerControlUpdateText = "8";
     private static string pseudoChordWindowMsText = "2";
+    private static string pseudoChordMaxSpanMsText = "2";
+    private static string pseudoChordExactDuplicateEpsilonMsText = "0.05";
     private static string maxHitsPerPseudoChordGroupText = "8";
     private static string virtualInputKeyCountText = "1";
     private static string macroKeyViewerPulseMsText = "80";
@@ -40,6 +42,8 @@ public static class Main
         maxLateRetryMsText = settings.MaxLateRetryMs.ToString(CultureInfo.InvariantCulture);
         maxHitsPerPlayerControlUpdateText = settings.MaxHitsPerPlayerControlUpdate.ToString(CultureInfo.InvariantCulture);
         pseudoChordWindowMsText = settings.PseudoChordWindowMs.ToString(CultureInfo.InvariantCulture);
+        pseudoChordMaxSpanMsText = settings.PseudoChordMaxSpanMs.ToString(CultureInfo.InvariantCulture);
+        pseudoChordExactDuplicateEpsilonMsText = settings.PseudoChordExactDuplicateEpsilonMs.ToString(CultureInfo.InvariantCulture);
         maxHitsPerPseudoChordGroupText = settings.MaxHitsPerPseudoChordGroup.ToString(CultureInfo.InvariantCulture);
         virtualInputKeyCountText = settings.VirtualInputKeyCount.ToString(CultureInfo.InvariantCulture);
         macroKeyViewerPulseMsText = settings.MacroKeyViewerPulseMs.ToString(CultureInfo.InvariantCulture);
@@ -204,6 +208,24 @@ public static class Main
         if (double.TryParse(pseudoChordWindowMsText, NumberStyles.Float, CultureInfo.InvariantCulture, out double pseudoChordWindowMs))
         {
             settings.PseudoChordWindowMs = Math.Max(0.0, pseudoChordWindowMs);
+        }
+        GUILayout.EndHorizontal();
+
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("PseudoChordMaxSpanMs", GUILayout.Width(140f));
+        pseudoChordMaxSpanMsText = GUILayout.TextField(pseudoChordMaxSpanMsText, GUILayout.Width(120f));
+        if (double.TryParse(pseudoChordMaxSpanMsText, NumberStyles.Float, CultureInfo.InvariantCulture, out double pseudoChordMaxSpanMs))
+        {
+            settings.PseudoChordMaxSpanMs = Math.Max(0.0, pseudoChordMaxSpanMs);
+        }
+        GUILayout.EndHorizontal();
+
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("PseudoChordExactEpsMs", GUILayout.Width(140f));
+        pseudoChordExactDuplicateEpsilonMsText = GUILayout.TextField(pseudoChordExactDuplicateEpsilonMsText, GUILayout.Width(120f));
+        if (double.TryParse(pseudoChordExactDuplicateEpsilonMsText, NumberStyles.Float, CultureInfo.InvariantCulture, out double pseudoChordExactDuplicateEpsilonMs))
+        {
+            settings.PseudoChordExactDuplicateEpsilonMs = Math.Max(0.0, pseudoChordExactDuplicateEpsilonMs);
         }
         GUILayout.EndHorizontal();
 
