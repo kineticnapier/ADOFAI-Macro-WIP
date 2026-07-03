@@ -687,9 +687,9 @@ internal sealed class InternalMacroService
             }
 
             double diffMs = (clockSeconds - effectiveTargetTimeSeconds) * 1000.0;
-            if (entry.IsMidspin && currentFloorSeqId > entry.SeqId)
+            if (entry.IsMidspin)
             {
-                LogVerbose($"floorGuard skipped: already passed midspin target. currentFloor={currentFloorSeqId} targetSeqID={entry.SeqId}");
+                LogVerbose($"midspin marker skipped. seqID={entry.SeqId} targetTime={effectiveTargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s currentFloor={currentFloorSeqId}");
                 nextIndex++;
                 continue;
             }
@@ -704,8 +704,11 @@ internal sealed class InternalMacroService
                 continue;
             }
 
+            bool canBridgeSkippedMidspinRun = CanBridgeSkippedMidspinRun(entry, currentFloorSeqId);
+
             if (!entry.IsMidspin &&
-                currentFloorSeqId < entry.SeqId - 1)
+                currentFloorSeqId < entry.SeqId - 1 &&
+                !canBridgeSkippedMidspinRun)
             {
                 LogFireSkip($"floor not ready: currentFloor={currentFloorSeqId} targetSeqID={entry.SeqId} clockTime={clockSeconds:F6}s");
                 suppressNextAdaptiveCorrection = true;
@@ -720,6 +723,11 @@ internal sealed class InternalMacroService
                 }
 
                 break;
+            }
+
+            if (canBridgeSkippedMidspinRun)
+            {
+                LogVerbose($"floorGuard bridged skipped midspin run. currentFloor={currentFloorSeqId} targetSeqID={entry.SeqId}");
             }
 
             if (currentFloorSeqId == 0 && entry.SeqId == 1 && settings.FirstHitMode == FirstHitMode.Manual)
@@ -962,6 +970,31 @@ internal sealed class InternalMacroService
         return settings.EnableHighDensityMode
             ? Math.Max(1, settings.MaxHitsPerPlayerControlUpdate)
             : 1;
+    }
+
+    private bool CanBridgeSkippedMidspinRun(MacroPlanEntry entry, int currentFloorSeqId)
+    {
+        if (entry.IsMidspin || nextIndex <= 0)
+        {
+            return false;
+        }
+
+        int index = nextIndex - 1;
+        int firstMidspinSeqId = -1;
+
+        while (index >= 0 && plan[index].IsMidspin)
+        {
+            firstMidspinSeqId = plan[index].SeqId;
+            index--;
+        }
+
+        if (firstMidspinSeqId < 0)
+        {
+            return false;
+        }
+
+        return currentFloorSeqId >= firstMidspinSeqId - 1 &&
+               currentFloorSeqId < entry.SeqId - 1;
     }
 
     private bool TryGetDirectHitChordGroup(
