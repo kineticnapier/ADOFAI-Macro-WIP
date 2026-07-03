@@ -181,6 +181,38 @@ internal sealed class InternalMacroService
 
         bool hasClock = audioClock.TryReadCurrentSeconds(settings.ClockMode, out double clockSeconds);
         bool hasCurrentFloor = TryReadCurrentFloorSeqId(out int currentFloor);
+        if ((running || armed) && hasCurrentFloor && currentFloor <= 0)
+        {
+            LogStartRewindReceived(
+                running,
+                armed,
+                hasCurrentFloor,
+                currentFloor,
+                hasClock,
+                clockSeconds,
+                action: "rearm floor-reset-while-active");
+
+            RecordStartRewindState(hasClock, clockSeconds);
+            Stop("start rewind floor reset while scheduler active");
+            BuildPlanAndArm();
+            return;
+        }
+
+        if (running || armed)
+        {
+            LogStartRewindReceived(
+                running,
+                armed,
+                hasCurrentFloor,
+                currentFloor,
+                hasClock,
+                clockSeconds,
+                action: "ignored scheduler-active");
+
+            RecordStartRewindState(hasClock, clockSeconds);
+            return;
+        }
+
         if (running || armed)
         {
             LogStartRewindReceived(
