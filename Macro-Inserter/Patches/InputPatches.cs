@@ -8,12 +8,16 @@ namespace Macro_Inserter;
 internal static class InputPatches
 {
     private static Func<InternalMacroService?>? getService;
+    private static Action<string>? log;
+    private static MethodInfo? simulatedPlayerControlUpdate;
+    private static bool forcingSimulatedUpdate;
 
     public static void Apply(Harmony harmony, Action<string> log, Func<InternalMacroService?> serviceAccessor)
     {
+        InputPatches.log = log;
         getService = serviceAccessor;
 
-        PatchPostfix(harmony, log, "ValidInputWasTriggered", nameof(ValidInputWasTriggeredPostfix));
+        PatchPrefix(harmony, log, "ValidInputWasTriggered", nameof(ValidInputWasTriggeredPrefix));
         PatchPrefix(harmony, log, "CountValidKeysPressed", nameof(CountValidKeysPressedPrefix));
         PatchHitInputEventCapture(harmony, log);
         PatchPlayerControlUpdate(harmony, log);
@@ -52,6 +56,7 @@ internal static class InputPatches
         MethodInfo? prefix = typeof(InputPatches).GetMethod(nameof(PlayerControlUpdatePrefix), BindingFlags.Static | BindingFlags.NonPublic);
         MethodInfo? postfix = typeof(InputPatches).GetMethod(nameof(PlayerControlUpdatePostfix), BindingFlags.Static | BindingFlags.NonPublic);
         IReadOnlyList<MethodInfo> targets = ReflectionCache.FindMethods("scrController", "PlayerControl_Update");
+        simulatedPlayerControlUpdate = ReflectionCache.FindMethod("scrController", "Simulated_PlayerControl_Update", typeof(ulong?));
         if (targets.Count == 0 || prefix == null || postfix == null)
         {
             log("Patch skipped: scrController.PlayerControl_Update was not found.");
@@ -67,6 +72,14 @@ internal static class InputPatches
         }
 
         log($"Patch applied: scrController.PlayerControl_Update ({targets.Count} overloads)");
+        if (simulatedPlayerControlUpdate == null)
+        {
+            log("Patch warning: scrController.Simulated_PlayerControl_Update was not found; async-input fallback cannot force game input simulation.");
+        }
+        else
+        {
+            log("Patch prepared: scrController.Simulated_PlayerControl_Update async-input fallback");
+        }
     }
 
     private static void PatchHitInputEventCapture(Harmony harmony, Action<string> log)
@@ -86,12 +99,25 @@ internal static class InputPatches
         log("Patch applied: scrController.HitInputEvent capture");
     }
 
-    private static void ValidInputWasTriggeredPostfix(ref bool __result)
+    private static bool ValidInputWasTriggeredPrefix(ref bool __result)
     {
-        if (InputPatchState.HasScheduledInput())
+        if (!InputPatchState.HasScheduledInput())
         {
-            __result = true;
+            return true;
         }
+
+        // Do not let the original ValidInputWasTriggered() run here.
+        // The original method calls CountValidKeysPressed() internally and also
+        // requires a real RDInput key edge. If we let it run for synthetic input,
+        // CountValidKeysPressed consumes the queued virtual key during the check,
+        // then HitAutoFloors() returns before it can add keyTimes.
+        //
+        // Returning true here preserves the game's normal outer flow:
+        //   HitAutoFloors() sees a triggered input
+        //   HitAutoFloors() then calls CountValidKeysPressed() once
+        //   that call consumes the virtual key and adds keyTimes
+        __result = true;
+        return false;
     }
 
     private static bool CountValidKeysPressedPrefix(ref int __result)
@@ -105,14 +131,55 @@ internal static class InputPatches
         return false;
     }
 
-    private static void HitInputEventPrefix(bool __0, object? __1)
+    private static bool HitInputEventPrefix(bool __0, object? __1, ref bool __result)
     {
+        if (InputPatchState.TryConsumeSyntheticHitInputEvent(__1, out int remainingBudget))
+        {
+            __result = true;
+            return false;
+        }
+
         HitInputEventInvoker.CaptureHumanInputEventState(__0, __1);
+        return true;
     }
 
-    private static void PlayerControlUpdatePrefix()
+    private static void PlayerControlUpdatePrefix(object __instance)
     {
+        if (forcingSimulatedUpdate)
+        {
+            return;
+        }
+
         getService?.Invoke()?.TickForPlayerControlUpdate();
+
+        if (!InputPatchState.HasScheduledInput())
+        {
+            return;
+        }
+
+        if (!ReflectionCache.TryReadBool("AsyncInputManager", out bool asyncInputActive, "isActive") || !asyncInputActive)
+        {
+            return;
+        }
+
+        if (simulatedPlayerControlUpdate == null)
+        {
+            return;
+        }
+
+        try
+        {
+            forcingSimulatedUpdate = true;
+            simulatedPlayerControlUpdate.Invoke(__instance, new object?[] { null });
+        }
+        catch (Exception ex)
+        {
+            log?.Invoke($"Forced Simulated_PlayerControl_Update failed: {ex.GetType().Name}: {ex.Message}");
+        }
+        finally
+        {
+            forcingSimulatedUpdate = false;
+        }
     }
 
     private static void PlayerControlUpdatePostfix()

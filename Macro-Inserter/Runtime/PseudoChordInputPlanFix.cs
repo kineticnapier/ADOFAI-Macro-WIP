@@ -17,9 +17,16 @@ namespace Macro_Inserter
 {
     internal static class PseudoChordInputPlanFix
     {
-        private static readonly Harmony Harmony = new Harmony("Macro-Inserter.PseudoChordInputPlanFix.v13");
+        private static readonly Harmony Harmony = new Harmony("Macro-Inserter.PseudoChordInputPlanFix.v20");
         private static readonly FieldInfo? SettingsField = AccessTools.Field(typeof(InternalMacroService), "settings");
         private static readonly FieldInfo? LogField = AccessTools.Field(typeof(InternalMacroService), "log");
+        private static readonly MethodInfo? PulseMacroKeyViewerMethod = AccessTools.Method(typeof(InternalMacroService), "PulseMacroKeyViewer");
+
+        private static int directKeyTimesEntriesSinceSummary;
+        private static int directKeyTimesKeysSinceSummary;
+        private static int directKeyTimesFloorAdvanceSinceSummary;
+        private static int macroKeyViewerPulsesSinceSummary;
+        private static double lastDirectKeyTimesSummaryRealtime;
 
         private static bool patched;
         private static bool patchAttempted;
@@ -80,11 +87,11 @@ namespace Macro_Inserter
                 }
 
                 patched = buildPatched && firePatched;
-                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v13 installed by {reason}. buildPatched={buildPatched} firePatched={firePatched}");
+                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v20 installed by {reason}. buildPatched={buildPatched} firePatched={firePatched}");
             }
             catch (Exception ex)
             {
-                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v13 install failed: {ex}");
+                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v20 install failed: {ex}");
             }
         }
 
@@ -104,7 +111,7 @@ namespace Macro_Inserter
             {
                 // The runtime input-pipeline plan is executed through the original
                 // DirectHit branch because that is the only branch that calls
-                // TryFirePseudoChordGroup(). The v11/v12 prefix on that method
+                // TryFirePseudoChordGroup(). The v11/v12/v13/v14/v15/v17/v18/v20 prefix on that method
                 // intercepts the call and schedules InputPatchState instead of
                 // calling scrController.Hit() directly.
                 //
@@ -115,8 +122,21 @@ namespace Macro_Inserter
                 // makes the scheduler desync and appear to stop.
                 if (settings.FireMode != FireMode.DirectHit)
                 {
-                    log($"Runtime input-pipeline plan active; forcing FireMode DirectHit branch. selectedFireMode={settings.FireMode} actualInjection=InputPatchState");
+                    log($"Runtime input-pipeline plan active; forcing FireMode DirectHit branch. selectedFireMode={settings.FireMode} actualInjection=DirectKeyTimes");
                     settings.FireMode = FireMode.DirectHit;
+                }
+
+                if (!settings.EnableHighDensityMode)
+                {
+                    settings.EnableHighDensityMode = true;
+                    log("Runtime input-pipeline plan active; forcing EnableHighDensityMode=True so DirectKeyTimes can keep up with dense input sections.");
+                }
+
+                if (settings.MaxHitsPerPlayerControlUpdate < 64)
+                {
+                    int previousMaxHits = settings.MaxHitsPerPlayerControlUpdate;
+                    settings.MaxHitsPerPlayerControlUpdate = 64;
+                    log($"Runtime input-pipeline plan active; raising MaxHitsPerPlayerControlUpdate from {previousMaxHits} to 64.");
                 }
 
                 __result = runtimeInputPlan;
@@ -144,24 +164,104 @@ namespace Macro_Inserter
             Action<string>? log = LogField?.GetValue(__instance) as Action<string>;
             int keyCount = Math.Max(1, entry.EmittedHitCount);
 
-            // This runs from the PlayerControl_Update prefix. scrController then executes
-            // its normal input pipeline during the original PlayerControl_Update body:
-            //   HitAutoFloors -> CountValidKeysPressed -> keyTimes.Add(...)
+            object? controller = ReflectionCache.GetSingletonInstance("scrController");
+            bool asyncInputActive = ReflectionCache.TryReadBool("AsyncInputManager", out bool active, "isActive") && active;
+
+            // v17 proved that faking ValidInputWasTriggered/CountValidKeysPressed is
+            // unstable here: the synthetic hit window can be consumed by unrelated Up
+            // events, and AsyncInput may skip the normal PlayerControl_Update body.
+            // Inject directly at the game's real input queue instead:
+            //   keyTimes.Add(now) x keyCount
             //   UpdateHoldKeys -> Hit(false)
-            //
-            // Important: do NOT report success to the original scheduler here.
-            // At prefix time the game has not consumed the virtual input yet, so advancing
-            // nextIndex immediately can desync when the input is missed or consumed later in
-            // the same Unity frame. Instead we schedule the frame input, return false, and
-            // let the next PlayerControl_Update confirm progress through the existing
-            // floorGuard path (currentFloor >= FirstSeqId). If the floor did not move, the
-            // same entry is retried until MaxLateRetryMs/Fault handling stops it.
-            InputPatchState.BeginFrame(keyCount);
+            // HitInputEvent(false, Down) is still accepted by InputPatches while the
+            // synthetic hit window is open.
+            bool allowDirectHitFallback =
+                keyCount == 1 &&
+                entry.RawEntryCount == 1 &&
+                !entry.ContainsMidspin &&
+                !entry.IsCompressed;
+
+            int afterFloor = DirectKeyTimesInputInjector.Inject(
+                controller,
+                keyCount,
+                forceSimulation: asyncInputActive,
+                allowDirectHitFallback: allowDirectHitFallback,
+                log);
+
+            if (afterFloor >= entry.FirstSeqId)
+            {
+                currentFloorAfter = afterFloor;
+                PulseMacroKeyViewer(__instance, keyCount);
+                RecordDirectKeyTimesSummary(log, keyCount, currentFloorBefore, afterFloor, asyncInputActive);
+                __result = true;
+                return false;
+            }
+
             currentFloorAfter = currentFloorBefore;
             log?.Invoke(
-                $"runtimeInputPatch queued; waiting for floor confirmation. keyCount={keyCount} seqID={entry.FirstSeqId}-{entry.LastSeqId} targetTime={entry.FirstTargetTimeSeconds:F6}s spanMs={entry.SpanMs:F3} rawEntryCount={entry.RawEntryCount} containsMidspin={entry.ContainsMidspin} currentFloorBefore={currentFloorBefore} expectedAfter={entry.LastSeqId} dueCount={dueCount}");
+                $"directKeyTimes queued; waiting for floor confirmation. keyCount={keyCount} seqID={entry.FirstSeqId}-{entry.LastSeqId} targetTime={entry.FirstTargetTimeSeconds:F6}s spanMs={entry.SpanMs:F3} rawEntryCount={entry.RawEntryCount} containsMidspin={entry.ContainsMidspin} isNearMidspin={entry.IsNearMidspin} allowDirectFallback={allowDirectHitFallback} currentFloorBefore={currentFloorBefore} currentFloorAfter={afterFloor} expectedAfter={entry.LastSeqId} dueCount={dueCount} asyncInputActive={asyncInputActive}");
             __result = false;
             return false;
         }
+        private static void PulseMacroKeyViewer(InternalMacroService service, int keyCount)
+        {
+            if (PulseMacroKeyViewerMethod == null || keyCount <= 0)
+            {
+                return;
+            }
+
+            int pulseCount = Math.Min(keyCount, 64);
+            for (int i = 0; i < pulseCount; i++)
+            {
+                try
+                {
+                    PulseMacroKeyViewerMethod.Invoke(service, Array.Empty<object>());
+                    macroKeyViewerPulsesSinceSummary++;
+                }
+                catch
+                {
+                    break;
+                }
+            }
+        }
+
+        private static void RecordDirectKeyTimesSummary(
+            Action<string>? log,
+            int keyCount,
+            int beforeFloor,
+            int afterFloor,
+            bool asyncInputActive)
+        {
+            directKeyTimesEntriesSinceSummary++;
+            directKeyTimesKeysSinceSummary += Math.Max(1, keyCount);
+            if (afterFloor > beforeFloor)
+            {
+                directKeyTimesFloorAdvanceSinceSummary += afterFloor - beforeFloor;
+            }
+
+            double now = Time.realtimeSinceStartupAsDouble;
+            if (lastDirectKeyTimesSummaryRealtime <= 0.0)
+            {
+                lastDirectKeyTimesSummaryRealtime = now;
+                return;
+            }
+
+            double elapsed = now - lastDirectKeyTimesSummaryRealtime;
+            if (elapsed < 0.5)
+            {
+                return;
+            }
+
+            double keysPerSecond = directKeyTimesKeysSinceSummary / Math.Max(0.001, elapsed);
+            log?.Invoke(
+                $"directKeyTimes summary. entries={directKeyTimesEntriesSinceSummary} keys={directKeyTimesKeysSinceSummary} floorAdvance={directKeyTimesFloorAdvanceSinceSummary} macroKeyViewerPulses={macroKeyViewerPulsesSinceSummary} elapsedMs={elapsed * 1000.0:F1} approxKps={keysPerSecond:F1} asyncInputActive={asyncInputActive}");
+
+            directKeyTimesEntriesSinceSummary = 0;
+            directKeyTimesKeysSinceSummary = 0;
+            directKeyTimesFloorAdvanceSinceSummary = 0;
+            macroKeyViewerPulsesSinceSummary = 0;
+            lastDirectKeyTimesSummaryRealtime = now;
+        }
+
     }
 }
