@@ -690,12 +690,18 @@ internal sealed class InternalMacroService
             double diffMs = (clockSeconds - effectiveTargetTimeSeconds) * 1000.0;
             if (entry.IsMidspin)
             {
+                if (currentFloorSeqId < entry.SeqId)
+                {
+                    LogFireSkip($"midspin not ready: currentFloor={currentFloorSeqId} targetSeqID={entry.SeqId} clockTime={clockSeconds:F6}s");
+                    break;
+                }
+
                 LogVerbose($"midspin marker skipped. seqID={entry.SeqId} targetTime={effectiveTargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s currentFloor={currentFloorSeqId}");
                 nextIndex++;
                 continue;
             }
 
-            if (!entry.IsMidspin && currentFloorSeqId >= entry.SeqId)
+            if (currentFloorSeqId >= entry.SeqId)
             {
                 string floorGuardReason = currentFloorSeqId > entry.SeqId
                     ? "already passed target"
@@ -705,30 +711,11 @@ internal sealed class InternalMacroService
                 continue;
             }
 
-            bool canBridgeSkippedMidspinRun = CanBridgeSkippedMidspinRun(entry, currentFloorSeqId);
-
-            if (!entry.IsMidspin &&
-                currentFloorSeqId < entry.SeqId - 1 &&
-                !canBridgeSkippedMidspinRun)
+            if (currentFloorSeqId < entry.SeqId - 1)
             {
                 LogFireSkip($"floor not ready: currentFloor={currentFloorSeqId} targetSeqID={entry.SeqId} clockTime={clockSeconds:F6}s");
                 suppressNextAdaptiveCorrection = true;
-                if (HandleHitFailedTooLate(entry, clockSeconds, diffMs, "floor not ready"))
-                {
-                    if (!running)
-                    {
-                        return;
-                    }
-
-                    continue;
-                }
-
                 break;
-            }
-
-            if (canBridgeSkippedMidspinRun)
-            {
-                LogVerbose($"floorGuard bridged skipped midspin run. currentFloor={currentFloorSeqId} targetSeqID={entry.SeqId}");
             }
 
             if (currentFloorSeqId == 0 && entry.SeqId == 1 && settings.FirstHitMode == FirstHitMode.Manual)
@@ -899,7 +886,14 @@ internal sealed class InternalMacroService
                 int beforeFloorSeqId = currentFloorSeqId;
                 HitInvokeResult result = directHitInvoker.Invoke(entry.SeqId, clockSeconds, beforeFloorSeqId, effectiveTargetTimeSeconds);
                 LogHitResult(currentFloorSeqId, result);
-                bool shouldConsumeDirectHit = result.ShouldConsume;
+                int afterFloorSeqId = result.AfterFloorSeqId;
+                if (afterFloorSeqId < 0 &&
+                    TryReadCurrentFloorSeqId(out int verifiedAfterFloorSeqId))
+                {
+                    afterFloorSeqId = verifiedAfterFloorSeqId;
+                }
+
+                bool shouldConsumeDirectHit = result.Accepted && afterFloorSeqId >= entry.SeqId;
                 if (shouldConsumeDirectHit)
                 {
                     RecordHitDiff(diffMs);
@@ -907,8 +901,7 @@ internal sealed class InternalMacroService
                     int oldNextIndex = nextIndex;
                     int syncedNextIndex = nextIndex + 1;
 
-                    if (TryReadCurrentFloorSeqId(out int afterFloorSeqId) &&
-                        afterFloorSeqId > entry.SeqId)
+                    if (afterFloorSeqId > entry.SeqId)
                     {
                         syncedNextIndex = AdvanceIndexPastCurrentFloor(nextIndex, afterFloorSeqId);
                         LogVerbose($"scheduler synced after DirectHit. beforeNextIndex={oldNextIndex} afterNextIndex={syncedNextIndex} targetSeqID={entry.SeqId} afterFloor={afterFloorSeqId}");
@@ -929,6 +922,13 @@ internal sealed class InternalMacroService
                     }
 
                     continue;
+                }
+
+                if (result.Accepted)
+                {
+                    LogVerbose($"DirectHit accepted but floor not advanced to target. currentFloor={currentFloorSeqId} targetSeqID={entry.SeqId} afterFloor={afterFloorSeqId}");
+                    suppressNextAdaptiveCorrection = true;
+                    break;
                 }
 
                 LogNormal($"Hit failed; keeping nextIndex={nextIndex} seqID={entry.SeqId}");
@@ -971,31 +971,6 @@ internal sealed class InternalMacroService
         return settings.EnableHighDensityMode
             ? Math.Max(1, settings.MaxHitsPerPlayerControlUpdate)
             : 1;
-    }
-
-    private bool CanBridgeSkippedMidspinRun(MacroPlanEntry entry, int currentFloorSeqId)
-    {
-        if (entry.IsMidspin || nextIndex <= 0)
-        {
-            return false;
-        }
-
-        int index = nextIndex - 1;
-        int firstMidspinSeqId = -1;
-
-        while (index >= 0 && plan[index].IsMidspin)
-        {
-            firstMidspinSeqId = plan[index].SeqId;
-            index--;
-        }
-
-        if (firstMidspinSeqId < 0)
-        {
-            return false;
-        }
-
-        return currentFloorSeqId >= firstMidspinSeqId - 1 &&
-               currentFloorSeqId < entry.SeqId - 1;
     }
 
     private bool TryGetDirectHitChordGroup(
