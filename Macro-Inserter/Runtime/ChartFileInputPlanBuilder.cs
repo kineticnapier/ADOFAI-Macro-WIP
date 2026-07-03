@@ -18,163 +18,24 @@ internal static class ChartFileInputPlanBuilder
         out IReadOnlyList<InputPlanEntry> inputPlan)
     {
         inputPlan = Array.Empty<InputPlanEntry>();
-        if (!TryResolveCurrentChartPath(log, out string chartPath))
+        if (macroPlan.Count == 0)
         {
-            log("Chart file input plan skipped: current .adofai path was not found.");
+            log("Runtime input-pipeline plan skipped: runtime MacroPlan is empty.");
             return false;
         }
 
-        try
-        {
-            IReadOnlyList<ChartFileNote> allNotes = AdofaiChartFileParser.ParseNotes(chartPath, settings.MacroOffsetMs);
-            List<ChartFileNote> playableNotes = allNotes
-                .Where(note => !note.IsAutoTile)
-                .OrderBy(note => note.TimeSeconds)
-                .ThenBy(note => note.SeqId)
-                .ToList();
-            int autoSkippedCount = allNotes.Count - playableNotes.Count;
-            if (playableNotes.Count == 0)
-            {
-                log($"Chart file input plan skipped: parsed chart has no playable notes. path={chartPath}");
-                return false;
-            }
-
-            playableNotes = CalibrateNoteTimesToRuntimePlan(log, macroPlan, playableNotes, chartPath);
-            inputPlan = BuildInputPlanFromNotes(settings, log, macroPlan, playableNotes, chartPath, autoSkippedCount);
-            return inputPlan.Count > 0;
-        }
-        catch (Exception ex)
-        {
-            log($"Chart file input plan failed: {ex.GetType().Name}: {ex.Message} path={chartPath}");
-            inputPlan = Array.Empty<InputPlanEntry>();
-            return false;
-        }
+        HashSet<int> autoSeqIds = TryReadAutoSeqIdsFromCurrentChart(log, out string? chartPath);
+        inputPlan = BuildInputPlanFromRuntimePlan(settings, log, macroPlan, autoSeqIds, chartPath);
+        return inputPlan.Count > 0;
     }
 
-    private static List<ChartFileNote> CalibrateNoteTimesToRuntimePlan(
-        Action<string> log,
-        IReadOnlyList<MacroPlanEntry> macroPlan,
-        IReadOnlyList<ChartFileNote> notes,
-        string chartPath)
-    {
-        if (macroPlan.Count == 0 || notes.Count == 0)
-        {
-            return notes.ToList();
-        }
-
-        Dictionary<int, double> runtimeTimeBySeqId = BuildRuntimeTimeBySeqId(macroPlan);
-        List<double> offsets = new List<double>();
-        List<string> sampleTexts = new List<string>();
-        double minOffset = double.PositiveInfinity;
-        double maxOffset = double.NegativeInfinity;
-
-        foreach (ChartFileNote note in notes)
-        {
-            if (!runtimeTimeBySeqId.TryGetValue(note.SeqId, out double runtimeTimeSeconds))
-            {
-                continue;
-            }
-
-            double offsetSeconds = runtimeTimeSeconds - note.TimeSeconds;
-            if (double.IsNaN(offsetSeconds) || double.IsInfinity(offsetSeconds))
-            {
-                continue;
-            }
-
-            offsets.Add(offsetSeconds);
-            minOffset = Math.Min(minOffset, offsetSeconds);
-            maxOffset = Math.Max(maxOffset, offsetSeconds);
-            if (sampleTexts.Count < 6)
-            {
-                sampleTexts.Add($"seqID={note.SeqId}:runtime={runtimeTimeSeconds:F6}s chart={note.TimeSeconds:F6}s diffMs={offsetSeconds * 1000.0:F3}");
-            }
-
-            // Use early matching notes only. The offset should be a constant start-time
-            // baseline difference; later samples can include parser drift while this
-            // mod is still being iterated.
-            if (offsets.Count >= 128)
-            {
-                break;
-            }
-        }
-
-        if (offsets.Count == 0)
-        {
-            log($"Chart file time calibration skipped: no matching seqID between chart notes and runtime plan. path={Path.GetFileName(chartPath)}");
-            return notes.ToList();
-        }
-
-        double medianOffsetSeconds = Median(offsets);
-        double spreadMs = (maxOffset - minOffset) * 1000.0;
-        log(
-            $"Chart file time calibrated. path={Path.GetFileName(chartPath)} samples={offsets.Count} offsetMs={medianOffsetSeconds * 1000.0:F3} spreadMs={spreadMs:F3} samples=[{string.Join("; ", sampleTexts.ToArray())}]");
-
-        if (spreadMs > 25.0)
-        {
-            log($"Chart file time calibration warning: offset spread is large. spreadMs={spreadMs:F3} path={Path.GetFileName(chartPath)}");
-        }
-
-        if (Math.Abs(medianOffsetSeconds) < 0.0000005)
-        {
-            return notes.ToList();
-        }
-
-        List<ChartFileNote> calibrated = new List<ChartFileNote>(notes.Count);
-        foreach (ChartFileNote note in notes)
-        {
-            calibrated.Add(new ChartFileNote(
-                note.Index,
-                note.SeqId,
-                note.TimeSeconds + medianOffsetSeconds,
-                note.RelativeAngle,
-                note.IsAutoTile,
-                note.IsNearMidspin));
-        }
-
-        return calibrated;
-    }
-
-    private static Dictionary<int, double> BuildRuntimeTimeBySeqId(IReadOnlyList<MacroPlanEntry> macroPlan)
-    {
-        Dictionary<int, double> result = new Dictionary<int, double>();
-        for (int i = 0; i < macroPlan.Count; i++)
-        {
-            MacroPlanEntry entry = macroPlan[i];
-            if (!result.ContainsKey(entry.SeqId))
-            {
-                result[entry.SeqId] = entry.TargetTimeSeconds;
-            }
-        }
-
-        return result;
-    }
-
-    private static double Median(IReadOnlyList<double> values)
-    {
-        if (values.Count == 0)
-        {
-            return 0.0;
-        }
-
-        double[] sorted = values.OrderBy(value => value).ToArray();
-        int middle = sorted.Length / 2;
-        if (sorted.Length % 2 == 1)
-        {
-            return sorted[middle];
-        }
-
-        return (sorted[middle - 1] + sorted[middle]) / 2.0;
-    }
-
-    private static IReadOnlyList<InputPlanEntry> BuildInputPlanFromNotes(
+    private static IReadOnlyList<InputPlanEntry> BuildInputPlanFromRuntimePlan(
         InternalMacroSettings settings,
         Action<string> log,
         IReadOnlyList<MacroPlanEntry> macroPlan,
-        IReadOnlyList<ChartFileNote> notes,
-        string chartPath,
-        int autoSkippedCount)
+        HashSet<int> autoSeqIds,
+        string? chartPath)
     {
-        Dictionary<int, int> planIndexBySeqId = BuildPlanIndexBySeqId(macroPlan);
         double windowMs = Math.Max(0.0, settings.PseudoChordWindowMs);
         double exactEpsilonMs = Math.Max(0.0, settings.PseudoChordExactDuplicateEpsilonMs);
         double groupingWindowMs = Math.Max(windowMs, exactEpsilonMs);
@@ -183,47 +44,96 @@ internal static class ChartFileInputPlanBuilder
             groupingWindowMs = 0.05;
         }
 
+        List<RuntimePlanItem> items = new List<RuntimePlanItem>(macroPlan.Count);
+        for (int i = 0; i < macroPlan.Count; i++)
+        {
+            MacroPlanEntry entry = macroPlan[i];
+            if (entry.SeqId <= 0 || entry.TargetTimeSeconds <= 0.0)
+            {
+                continue;
+            }
+
+            items.Add(new RuntimePlanItem(i, entry, autoSeqIds.Contains(entry.SeqId)));
+        }
+
+        items = items
+            .OrderBy(item => item.Entry.TargetTimeSeconds)
+            .ThenBy(item => item.Entry.SeqId)
+            .ToList();
+
         List<InputPlanEntry> result = new List<InputPlanEntry>();
-        int chordGroupCount = 0;
-        int maxChordSize = 1;
+        int groupCount = 0;
+        int inputPatchGroupCount = 0;
+        int skippedAutoCount = 0;
+        int skippedMidspinOnlyGroupCount = 0;
+        int maxRawGroupSize = 1;
+        int maxKeyCount = 1;
         int index = 0;
-        while (index < notes.Count)
+        while (index < items.Count)
         {
             int start = index;
-            ChartFileNote first = notes[index];
-            double firstTime = first.TimeSeconds;
+            RuntimePlanItem first = items[index];
+            double firstTime = first.Entry.TargetTimeSeconds;
             index++;
-            while (index < notes.Count &&
-                   (notes[index].TimeSeconds - firstTime) * 1000.0 <= groupingWindowMs + 0.0001)
+            while (index < items.Count &&
+                   (items[index].Entry.TargetTimeSeconds - firstTime) * 1000.0 <= groupingWindowMs + 0.0001)
             {
                 index++;
             }
 
             int count = index - start;
-            ChartFileNote last = notes[index - 1];
-            int firstSeqId = notes.Skip(start).Take(count).Min(note => note.SeqId);
-            int lastSeqId = notes.Skip(start).Take(count).Max(note => note.SeqId);
-            int planStartIndex = FindPlanIndex(planIndexBySeqId, macroPlan, firstSeqId, firstTime);
-            int planEndIndexExclusive = Math.Max(planStartIndex + 1, FindPlanIndex(planIndexBySeqId, macroPlan, lastSeqId, last.TimeSeconds) + 1);
-            bool containsNearMidspin = false;
-            List<double> hitTimes = new List<double>(count);
-            List<int> expectedAfterSeqIds = new List<int>(count);
-            for (int offset = 0; offset < count; offset++)
+            RuntimePlanItem last = items[index - 1];
+            IReadOnlyList<RuntimePlanItem> group = items.GetRange(start, count);
+            groupCount++;
+            maxRawGroupSize = Math.Max(maxRawGroupSize, count);
+
+            int firstSeqId = group.Min(item => item.Entry.SeqId);
+            int lastSeqId = group.Max(item => item.Entry.SeqId);
+            int planStartIndex = group.Min(item => item.PlanIndex);
+            int planEndIndexExclusive = group.Max(item => item.PlanIndex) + 1;
+            bool containsMidspin = group.Any(item => item.Entry.IsMidspin || item.Entry.IsNearMidspin);
+            bool containsAuto = group.Any(item => item.IsAutoTile);
+            int autoCount = group.Count(item => item.IsAutoTile);
+            skippedAutoCount += autoCount;
+
+            // Game-code invariant:
+            // - Keyboard input enters through CountValidKeysPressed().
+            // - HitAutoFloors adds CountValidKeysPressed() entries into keyTimes.
+            // - UpdateHoldKeys consumes keyTimes and calls Hit(false).
+            // - Hit(false) itself adds one extra keyTime when the landed floor is midspin.
+            // Therefore external key count is runtime floors minus auto floors minus midspin floors.
+            // The runtime floor timestamps stay authoritative; chart data is only a best-effort
+            // source for AutoPlayTiles state.
+            List<RuntimePlanItem> externalKeyItems = group
+                .Where(item => !item.IsAutoTile && !item.Entry.IsMidspin)
+                .OrderBy(item => item.Entry.TargetTimeSeconds)
+                .ThenBy(item => item.Entry.SeqId)
+                .ToList();
+
+            int keyCount = externalKeyItems.Count;
+            if (keyCount <= 0)
             {
-                ChartFileNote note = notes[start + offset];
-                containsNearMidspin |= note.IsNearMidspin;
-                hitTimes.Add(note.TimeSeconds);
-                expectedAfterSeqIds.Add(note.SeqId);
+                skippedMidspinOnlyGroupCount++;
+                continue;
             }
 
-            if (count > 1)
+            maxKeyCount = Math.Max(maxKeyCount, keyCount);
+            if (keyCount > SuspiciousChordWarningThreshold)
             {
-                chordGroupCount++;
-                maxChordSize = Math.Max(maxChordSize, count);
-                if (count > SuspiciousChordWarningThreshold)
-                {
-                    log($"Chart file chord is large. keyCount={count} seqID={firstSeqId}-{lastSeqId} time={firstTime:F6}s path={Path.GetFileName(chartPath)}");
-                }
+                log($"Runtime input-pipeline group is large. keyCount={keyCount} rawEntryCount={count} seqID={firstSeqId}-{lastSeqId} time={firstTime:F6}s");
+            }
+
+            if (keyCount > 1 || count > 1)
+            {
+                inputPatchGroupCount++;
+            }
+
+            List<double> hitTimes = new List<double>(keyCount);
+            List<int> expectedAfterSeqIds = new List<int>(keyCount);
+            foreach (RuntimePlanItem keyItem in externalKeyItems)
+            {
+                hitTimes.Add(keyItem.Entry.TargetTimeSeconds);
+                expectedAfterSeqIds.Add(lastSeqId);
             }
 
             result.Add(new InputPlanEntry(
@@ -231,68 +141,57 @@ internal static class ChartFileInputPlanBuilder
                 planEndIndexExclusive,
                 firstSeqId,
                 lastSeqId,
-                first.TimeSeconds,
-                last.TimeSeconds,
+                first.Entry.TargetTimeSeconds,
+                last.Entry.TargetTimeSeconds,
                 rawEntryCount: count,
-                emittedHitCount: count,
-                isExactDuplicateGroup: count > 1 && Math.Abs(last.TimeSeconds - first.TimeSeconds) * 1000.0 <= exactEpsilonMs,
-                containsMidspin: containsNearMidspin,
-                isNearMidspin: containsNearMidspin,
-                isCompressed: false,
+                emittedHitCount: keyCount,
+                isExactDuplicateGroup: Math.Abs(last.Entry.TargetTimeSeconds - first.Entry.TargetTimeSeconds) * 1000.0 <= exactEpsilonMs,
+                containsMidspin: containsMidspin,
+                isNearMidspin: containsMidspin,
+                isCompressed: keyCount < count,
                 hitTargetTimeSeconds: hitTimes,
                 expectedAfterSeqIds: expectedAfterSeqIds,
-                isChartFileChord: count > 1));
+                isChartFileChord: false,
+                useInputPatchPipeline: true));
         }
 
-        log($"Chart file input plan built. path={chartPath} playableNotes={notes.Count} inputEntries={result.Count} chordGroups={chordGroupCount} maxChordSize={maxChordSize} groupingWindowMs={groupingWindowMs:F3} autoSkipped={autoSkippedCount}");
+        string chartText = string.IsNullOrEmpty(chartPath) ? "<none>" : chartPath;
+        log(
+            $"Runtime input-pipeline plan built. runtimeEntries={items.Count} inputEntries={result.Count} rawGroups={groupCount} inputPatchGroups={inputPatchGroupCount} maxRawGroupSize={maxRawGroupSize} maxKeyCount={maxKeyCount} groupingWindowMs={groupingWindowMs:F3} autoSeqIds={autoSeqIds.Count} skippedAutoMembers={skippedAutoCount} skippedNoExternalKeyGroups={skippedMidspinOnlyGroupCount} chart={chartText}");
         return result;
     }
 
-    private static Dictionary<int, int> BuildPlanIndexBySeqId(IReadOnlyList<MacroPlanEntry> macroPlan)
+    private static HashSet<int> TryReadAutoSeqIdsFromCurrentChart(Action<string> log, out string? chartPath)
     {
-        Dictionary<int, int> result = new Dictionary<int, int>();
-        for (int i = 0; i < macroPlan.Count; i++)
+        chartPath = null;
+        HashSet<int> result = new HashSet<int>();
+        if (!TryResolveCurrentChartPath(log, out string resolvedPath))
         {
-            if (!result.ContainsKey(macroPlan[i].SeqId))
+            log("Runtime input-pipeline plan: current .adofai path was not found; AutoPlayTiles filtering is disabled for this run.");
+            return result;
+        }
+
+        chartPath = resolvedPath;
+        try
+        {
+            IReadOnlyList<ChartFileNote> notes = AdofaiChartFileParser.ParseNotes(resolvedPath, macroOffsetMs: 0.0);
+            foreach (ChartFileNote note in notes)
             {
-                result[macroPlan[i].SeqId] = i;
+                if (note.IsAutoTile)
+                {
+                    result.Add(note.SeqId);
+                }
             }
+
+            log($"Runtime input-pipeline plan: loaded AutoPlayTiles hints from chart. path={resolvedPath} autoSeqIds={result.Count}");
+            return result;
         }
-
-        return result;
-    }
-
-    private static int FindPlanIndex(
-        IReadOnlyDictionary<int, int> planIndexBySeqId,
-        IReadOnlyList<MacroPlanEntry> macroPlan,
-        int seqId,
-        double targetTimeSeconds)
-    {
-        if (planIndexBySeqId.TryGetValue(seqId, out int exactIndex))
+        catch (Exception ex)
         {
-            return exactIndex;
+            log($"Runtime input-pipeline plan: failed to read AutoPlayTiles hints; continuing without chart trust. error={ex.GetType().Name}: {ex.Message} path={resolvedPath}");
+            result.Clear();
+            return result;
         }
-
-        if (macroPlan.Count == 0)
-        {
-            return 0;
-        }
-
-        int bestIndex = 0;
-        double bestScore = double.MaxValue;
-        for (int i = 0; i < macroPlan.Count; i++)
-        {
-            double seqPenalty = Math.Abs(macroPlan[i].SeqId - seqId) * 0.010;
-            double timePenalty = Math.Abs(macroPlan[i].TargetTimeSeconds - targetTimeSeconds);
-            double score = seqPenalty + timePenalty;
-            if (score < bestScore)
-            {
-                bestScore = score;
-                bestIndex = i;
-            }
-        }
-
-        return bestIndex;
     }
 
     private static bool TryResolveCurrentChartPath(Action<string> log, out string path)
@@ -418,7 +317,6 @@ internal static class ChartFileInputPlanBuilder
 
         if (rawPaths is IEnumerable enumerable)
         {
-            int index = 0;
             List<string> values = new List<string>();
             foreach (object? item in enumerable)
             {
@@ -426,8 +324,6 @@ internal static class ChartFileInputPlanBuilder
                 {
                     values.Add(value);
                 }
-
-                index++;
             }
 
             if (customLevelIndex >= 0 && customLevelIndex < values.Count)
@@ -637,5 +533,21 @@ internal static class ChartFileInputPlanBuilder
         }
 
         return false;
+    }
+
+    private sealed class RuntimePlanItem
+    {
+        public RuntimePlanItem(int planIndex, MacroPlanEntry entry, bool isAutoTile)
+        {
+            PlanIndex = planIndex;
+            Entry = entry;
+            IsAutoTile = isAutoTile;
+        }
+
+        public int PlanIndex { get; }
+
+        public MacroPlanEntry Entry { get; }
+
+        public bool IsAutoTile { get; }
     }
 }

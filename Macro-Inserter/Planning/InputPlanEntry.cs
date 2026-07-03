@@ -27,7 +27,8 @@ internal sealed class InputPlanEntry
         bool isCompressed = false,
         IReadOnlyList<double>? hitTargetTimeSeconds = null,
         IReadOnlyList<int>? expectedAfterSeqIds = null,
-        bool isChartFileChord = false)
+        bool isChartFileChord = false,
+        bool useInputPatchPipeline = false)
     {
         PlanStartIndex = Math.Max(0, planStartIndex);
         PlanEndIndexExclusive = Math.Max(PlanStartIndex + 1, planEndIndexExclusive);
@@ -44,6 +45,7 @@ internal sealed class InputPlanEntry
         HitTargetTimeSeconds = hitTargetTimeSeconds ?? Array.Empty<double>();
         ExpectedAfterSeqIds = expectedAfterSeqIds ?? Array.Empty<int>();
         IsChartFileChord = isChartFileChord;
+        UseInputPatchPipeline = useInputPatchPipeline;
     }
 
     public int PlanStartIndex { get; }
@@ -72,13 +74,17 @@ internal sealed class InputPlanEntry
 
     public bool IsCompressed { get; }
 
+    // Kept for compatibility with earlier v8-v10 builds. In v11 the important
+    // flag is UseInputPatchPipeline; the plan is runtime-first, not chart-time-first.
     public bool IsChartFileChord { get; }
+
+    public bool UseInputPatchPipeline { get; }
 
     public IReadOnlyList<double> HitTargetTimeSeconds { get; }
 
     public IReadOnlyList<int> ExpectedAfterSeqIds { get; }
 
-    public bool IsPseudoChordGroup => RawEntryCount > 1 || IsChartFileChord;
+    public bool IsPseudoChordGroup => UseInputPatchPipeline || IsChartFileChord || RawEntryCount > 1;
 
     public double GetHitTargetTimeSeconds(int hitIndex)
     {

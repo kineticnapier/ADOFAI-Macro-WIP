@@ -17,7 +17,7 @@ namespace Macro_Inserter
 {
     internal static class PseudoChordInputPlanFix
     {
-        private static readonly Harmony Harmony = new Harmony("Macro-Inserter.PseudoChordInputPlanFix.v10");
+        private static readonly Harmony Harmony = new Harmony("Macro-Inserter.PseudoChordInputPlanFix.v11");
         private static readonly FieldInfo? SettingsField = AccessTools.Field(typeof(InternalMacroService), "settings");
         private static readonly FieldInfo? LogField = AccessTools.Field(typeof(InternalMacroService), "log");
 
@@ -80,11 +80,11 @@ namespace Macro_Inserter
                 }
 
                 patched = buildPatched && firePatched;
-                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v10 installed by {reason}. buildPatched={buildPatched} firePatched={firePatched}");
+                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v11 installed by {reason}. buildPatched={buildPatched} firePatched={firePatched}");
             }
             catch (Exception ex)
             {
-                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v10 install failed: {ex}");
+                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v11 install failed: {ex}");
             }
         }
 
@@ -100,13 +100,13 @@ namespace Macro_Inserter
                 return true;
             }
 
-            if (ChartFileInputPlanBuilder.TryBuild(settings, log, macroPlan, out IReadOnlyList<InputPlanEntry> chartInputPlan))
+            if (ChartFileInputPlanBuilder.TryBuild(settings, log, macroPlan, out IReadOnlyList<InputPlanEntry> runtimeInputPlan))
             {
-                __result = chartInputPlan;
+                __result = runtimeInputPlan;
                 return false;
             }
 
-            log("Chart file input plan unavailable; runtime floor fallback is disabled to avoid unsafe pseudoChord over-hit/under-hit behavior.");
+            log("Runtime input-pipeline plan unavailable; disabling internal input plan instead of falling back to DirectHit.");
             __result = Array.Empty<InputPlanEntry>();
             return false;
         }
@@ -119,17 +119,23 @@ namespace Macro_Inserter
             ref int currentFloorAfter,
             ref bool __result)
         {
-            if (!entry.IsChartFileChord)
+            if (!entry.UseInputPatchPipeline)
             {
                 return true;
             }
 
             Action<string>? log = LogField?.GetValue(__instance) as Action<string>;
             int keyCount = Math.Max(1, entry.EmittedHitCount);
+
+            // This runs from the PlayerControl_Update prefix. scrController then executes
+            // its normal Simulated_PlayerControl_Update order:
+            //   HitAutoFloors -> CountValidKeysPressed -> keyTimes.Add(...)
+            //   UpdateHoldKeys -> Hit(false)
+            // So midspin and hold behavior stays owned by the game instead of DirectHit.
             InputPatchState.BeginFrame(keyCount);
             currentFloorAfter = entry.LastSeqId;
             log?.Invoke(
-                $"chartChord scheduled input patch. keyCount={keyCount} seqID={entry.FirstSeqId}-{entry.LastSeqId} targetTime={entry.FirstTargetTimeSeconds:F6}s spanMs={entry.SpanMs:F3} currentFloorBefore={currentFloorBefore} expectedAfter={currentFloorAfter} dueCount={dueCount}");
+                $"runtimeInputPatch scheduled. keyCount={keyCount} seqID={entry.FirstSeqId}-{entry.LastSeqId} targetTime={entry.FirstTargetTimeSeconds:F6}s spanMs={entry.SpanMs:F3} rawEntryCount={entry.RawEntryCount} containsMidspin={entry.ContainsMidspin} currentFloorBefore={currentFloorBefore} expectedAfter={currentFloorAfter} dueCount={dueCount}");
             __result = true;
             return false;
         }
