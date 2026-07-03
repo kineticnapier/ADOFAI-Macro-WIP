@@ -141,40 +141,38 @@ internal sealed class DirectHitInvoker
             LogConductorTimeMembersOnce(conductor);
             if (!EnsureTimeSpoofAccessors(conductor.GetType()))
             {
-                MarkTimeSpoofUnavailable(
-                    "conductor songposition fields were not writable. " +
-                    $"songposition={songPositionAccessorReason ?? "<unknown>"}; " +
-                    $"songposition_minusi={songPositionMinusIAccessorReason ?? "<unknown>"}");
+                MarkTimeSpoofUnavailable("no writable song position member");
                 return null;
             }
 
-            if (!songPositionAccessor!.TryGet(conductor, out object? oldSongPosition) ||
-                !songPositionMinusIAccessor!.TryGet(conductor, out object? oldSongPositionMinusI))
+            if (!songPositionMinusIAccessor!.TryGet(conductor, out object? oldSongPositionMinusI))
             {
-                MarkTimeSpoofUnavailable("conductor songposition fields were not readable.");
-                return null;
-            }
-
-            if (!songPositionAccessor.TrySet(conductor, targetTimeSeconds))
-            {
-                MarkTimeSpoofUnavailable("conductor songposition field was not writable.");
+                MarkTimeSpoofUnavailable("no writable song position member");
                 return null;
             }
 
             if (!songPositionMinusIAccessor.TrySet(conductor, targetTimeSeconds))
             {
-                songPositionAccessor.TrySet(conductor, oldSongPosition);
-                MarkTimeSpoofUnavailable("conductor songposition_minusi field was not writable.");
+                MarkTimeSpoofUnavailable("no writable song position member");
                 return null;
             }
 
-            LogVerbose($"timeSpoof enabled targetTime={targetTimeSeconds:F6}s");
+            bool wroteSongPosition = false;
+            object? oldSongPosition = null;
+            if (songPositionAccessor != null &&
+                songPositionAccessor.TryGet(conductor, out oldSongPosition))
+            {
+                wroteSongPosition = songPositionAccessor.TrySet(conductor, targetTimeSeconds);
+            }
+
+            LogVerbose($"timeSpoof enabled targetTime={targetTimeSeconds:F6}s wroteSongpositionMinusI=True wroteSongposition={wroteSongPosition}");
             return new TimeSpoofState(
                 conductor,
                 songPositionAccessor,
                 songPositionMinusIAccessor,
                 oldSongPosition,
                 oldSongPositionMinusI,
+                wroteSongPosition,
                 message => LogVerbose(message));
         }
         catch (Exception ex)
@@ -315,7 +313,6 @@ internal sealed class DirectHitInvoker
     private bool EnsureTimeSpoofAccessors(Type conductorType)
     {
         if (cachedConductorType == conductorType &&
-            songPositionAccessor != null &&
             songPositionMinusIAccessor != null)
         {
             return true;
@@ -324,7 +321,7 @@ internal sealed class DirectHitInvoker
         cachedConductorType = conductorType;
         songPositionAccessor = TimeSpoofMemberAccessor.Create(conductorType, "songposition", out songPositionAccessorReason);
         songPositionMinusIAccessor = TimeSpoofMemberAccessor.Create(conductorType, "songposition_minusi", out songPositionMinusIAccessorReason);
-        return songPositionAccessor != null && songPositionMinusIAccessor != null;
+        return songPositionMinusIAccessor != null;
     }
 
     private void LogInvalidFloorIfNeeded(int seqId, double audioTime)
@@ -400,18 +397,20 @@ internal sealed class DirectHitInvoker
     private sealed class TimeSpoofState
     {
         private readonly object conductor;
-        private readonly TimeSpoofMemberAccessor songPositionAccessor;
+        private readonly TimeSpoofMemberAccessor? songPositionAccessor;
         private readonly TimeSpoofMemberAccessor songPositionMinusIAccessor;
         private readonly object? oldSongPosition;
         private readonly object? oldSongPositionMinusI;
+        private readonly bool restoreSongPosition;
         private readonly Action<string> logVerbose;
 
         public TimeSpoofState(
             object conductor,
-            TimeSpoofMemberAccessor songPositionAccessor,
+            TimeSpoofMemberAccessor? songPositionAccessor,
             TimeSpoofMemberAccessor songPositionMinusIAccessor,
             object? oldSongPosition,
             object? oldSongPositionMinusI,
+            bool restoreSongPosition,
             Action<string> logVerbose)
         {
             this.conductor = conductor;
@@ -419,12 +418,14 @@ internal sealed class DirectHitInvoker
             this.songPositionMinusIAccessor = songPositionMinusIAccessor;
             this.oldSongPosition = oldSongPosition;
             this.oldSongPositionMinusI = oldSongPositionMinusI;
+            this.restoreSongPosition = restoreSongPosition;
             this.logVerbose = logVerbose;
         }
 
         public void Restore()
         {
-            bool restoredSongPosition = songPositionAccessor.TrySet(conductor, oldSongPosition);
+            bool restoredSongPosition = !restoreSongPosition ||
+                                        songPositionAccessor?.TrySet(conductor, oldSongPosition) == true;
             bool restoredSongPositionMinusI = songPositionMinusIAccessor.TrySet(conductor, oldSongPositionMinusI);
             if (!restoredSongPosition || !restoredSongPositionMinusI)
             {
