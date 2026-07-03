@@ -10,7 +10,6 @@ internal static class LifecyclePatches
 {
     private static readonly string[] StopMethodNames =
     {
-        "SwitchToEditMode",
         "Restart",
         "QuitToMainMenu",
         "Won_Update"
@@ -31,6 +30,7 @@ internal static class LifecyclePatches
         }
 
         log("Patch skipped: Fail2Action lifecycle stop is disabled.");
+        log("SwitchToEditMode lifecycle stop is disabled because it can fire during playback or level load.");
     }
 
     private static void PatchStartRewind(Harmony harmony, Action<string> log)

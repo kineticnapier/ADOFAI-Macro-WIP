@@ -181,6 +181,20 @@ internal sealed class InternalMacroService
 
         bool hasClock = audioClock.TryReadCurrentSeconds(settings.ClockMode, out double clockSeconds);
         bool hasCurrentFloor = TryReadCurrentFloorSeqId(out int currentFloor);
+        if (running || armed)
+        {
+            LogStartRewindReceived(
+                running,
+                armed,
+                hasCurrentFloor,
+                currentFloor,
+                hasClock,
+                clockSeconds,
+                action: "ignored scheduler-active");
+            RecordStartRewindState(hasClock, clockSeconds);
+            return;
+        }
+
         if ((running || armed) &&
             IsDuplicateStartRewind(hasClock, clockSeconds, hasCurrentFloor, currentFloor, out string duplicateReason))
         {
@@ -313,6 +327,8 @@ internal sealed class InternalMacroService
     public void Stop(string reason)
     {
         bool wasRunning = running;
+        bool wasArmed = armed;
+
         armed = false;
         running = false;
         plan = Array.Empty<MacroPlanEntry>();
@@ -320,12 +336,12 @@ internal sealed class InternalMacroService
         firstInputPatchScheduled = false;
         InputPatchState.Reset();
 
-        if (!wasRunning)
+        if (!wasRunning && !wasArmed)
         {
             return;
         }
 
-        log($"Internal macro scheduler stopped. reason={reason}");
+        log($"Internal macro scheduler stopped. reason={reason}, wasRunning={wasRunning}, wasArmed={wasArmed}");
     }
 
     private bool BuildPlanAndArm()
