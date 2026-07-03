@@ -195,21 +195,6 @@ internal sealed class InternalMacroService
             return;
         }
 
-        if ((running || armed) &&
-            IsDuplicateStartRewind(hasClock, clockSeconds, hasCurrentFloor, currentFloor, out string duplicateReason))
-        {
-            LogStartRewindReceived(
-                running,
-                armed,
-                hasCurrentFloor,
-                currentFloor,
-                hasClock,
-                clockSeconds,
-                action: $"ignored {duplicateReason}");
-            RecordStartRewindState(hasClock, clockSeconds);
-            return;
-        }
-
         LogStartRewindReceived(
             running,
             armed,
