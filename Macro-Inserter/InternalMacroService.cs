@@ -23,7 +23,6 @@ internal sealed class InternalMacroService
     private const int DueBacklogFailureMultiplier = 4;
     private const int MinDueBacklogFailureThreshold = 16;
     private const double ChordTargetTimeThresholdSeconds = 0.0001;
-    private const double MidspinGroupTargetTimeThresholdSeconds = 0.001;
 
     private readonly InternalMacroSettings settings;
     private readonly Action<string> log;
@@ -688,27 +687,14 @@ internal sealed class InternalMacroService
             }
 
             double diffMs = (clockSeconds - effectiveTargetTimeSeconds) * 1000.0;
-            bool isMidspinGroup = TryGetMidspinGroup(
-                effectiveTargetTimeSeconds,
-                out int midspinGroupEndIndex,
-                out int midspinGroupFirstSeqId,
-                out int midspinGroupLastSeqId);
-
-            if (isMidspinGroup && currentFloorSeqId >= midspinGroupFirstSeqId)
+            if (entry.IsMidspin && currentFloorSeqId > entry.SeqId)
             {
-                LogNormal($"floorGuard skipped: already in/past midspin group. currentFloor={currentFloorSeqId} firstSeqID={midspinGroupFirstSeqId} lastSeqID={midspinGroupLastSeqId} groupStartIndex={nextIndex} groupEndIndex={midspinGroupEndIndex}");
-                nextIndex = midspinGroupEndIndex;
-                continue;
-            }
-
-            if (!isMidspinGroup && entry.IsMidspin && currentFloorSeqId > entry.SeqId)
-            {
-                LogNormal($"floorGuard skipped: already passed midspin target. currentFloor={currentFloorSeqId} targetSeqID={entry.SeqId}");
+                LogVerbose($"floorGuard skipped: already passed midspin target. currentFloor={currentFloorSeqId} targetSeqID={entry.SeqId}");
                 nextIndex++;
                 continue;
             }
 
-            if (!isMidspinGroup && !entry.IsMidspin && currentFloorSeqId >= entry.SeqId)
+            if (!entry.IsMidspin && currentFloorSeqId >= entry.SeqId)
             {
                 string floorGuardReason = currentFloorSeqId > entry.SeqId
                     ? "already passed target"
@@ -718,30 +704,12 @@ internal sealed class InternalMacroService
                 continue;
             }
 
-            if (!isMidspinGroup &&
-                !entry.IsMidspin &&
+            if (!entry.IsMidspin &&
                 currentFloorSeqId < entry.SeqId - 1)
             {
                 LogFireSkip($"floor not ready: currentFloor={currentFloorSeqId} targetSeqID={entry.SeqId} clockTime={clockSeconds:F6}s");
                 suppressNextAdaptiveCorrection = true;
                 if (HandleHitFailedTooLate(entry, clockSeconds, diffMs, "floor not ready"))
-                {
-                    if (!running)
-                    {
-                        return;
-                    }
-
-                    continue;
-                }
-
-                break;
-            }
-
-            if (isMidspinGroup && currentFloorSeqId < midspinGroupFirstSeqId - 1)
-            {
-                LogFireSkip($"midspin group floor not ready: currentFloor={currentFloorSeqId} firstSeqID={midspinGroupFirstSeqId} lastSeqID={midspinGroupLastSeqId} groupStartIndex={nextIndex} groupEndIndex={midspinGroupEndIndex} clockTime={clockSeconds:F6}s");
-                suppressNextAdaptiveCorrection = true;
-                if (HandleHitFailedTooLate(entry, clockSeconds, diffMs, "midspin group floor not ready"))
                 {
                     if (!running)
                     {
@@ -835,54 +803,6 @@ internal sealed class InternalMacroService
                 if (!allowDirectHit)
                 {
                     return;
-                }
-
-                if (isMidspinGroup)
-                {
-                    int beforeMidspinGroupFloorSeqId = currentFloorSeqId;
-                    LogVerbose($"DirectHit midspin group attempt: groupStartIndex={nextIndex} groupEndIndex={midspinGroupEndIndex} firstSeqID={midspinGroupFirstSeqId} lastSeqID={midspinGroupLastSeqId} targetTime={effectiveTargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s currentFloor={currentFloorSeqId}");
-                    HitInvokeResult midspinGroupResult = directHitInvoker.Invoke(
-                        midspinGroupFirstSeqId,
-                        clockSeconds,
-                        beforeMidspinGroupFloorSeqId,
-                        effectiveTargetTimeSeconds);
-                    LogHitResult(currentFloorSeqId, midspinGroupResult);
-
-                    if (midspinGroupResult.Accepted)
-                    {
-                        RecordHitDiff(diffMs);
-                        UpdateAdaptiveOffsetAfterDirectHit(diffMs, dueCount, entry);
-                        nextIndex = midspinGroupEndIndex;
-                        hitsThisUpdate++;
-                        PulseMacroKeyViewer();
-                        LogVerbose($"DirectHit midspin group consumed: firstSeqID={midspinGroupFirstSeqId} lastSeqID={midspinGroupLastSeqId} afterFloor={midspinGroupResult.AfterFloorSeqId} nextIndex={nextIndex}");
-                        if (!settings.EnableHighDensityMode)
-                        {
-                            break;
-                        }
-
-                        if (hitsThisUpdate >= maxHitsThisUpdate)
-                        {
-                            LogVerbose($"highDensity maxHitsReached hitsThisUpdate={hitsThisUpdate} maxHitsPerUpdate={maxHitsThisUpdate} nextIndex={nextIndex} dueCount={dueCount}");
-                            break;
-                        }
-
-                        continue;
-                    }
-
-                    LogNormal($"midspin group DirectHit failed. currentFloorSeqId={currentFloorSeqId} groupStartIndex={nextIndex} groupEndIndex={midspinGroupEndIndex} firstSeqID={midspinGroupFirstSeqId} lastSeqID={midspinGroupLastSeqId} targetTime={effectiveTargetTimeSeconds:F6}s clockTime={clockSeconds:F6}s");
-                    suppressNextAdaptiveCorrection = true;
-                    if (HandleHitFailedTooLate(entry, clockSeconds, diffMs, "midspin group DirectHit failed"))
-                    {
-                        if (!running)
-                        {
-                            return;
-                        }
-
-                        continue;
-                    }
-
-                    break;
                 }
 
                 if (TryGetDirectHitChordGroup(
@@ -1042,34 +962,6 @@ internal sealed class InternalMacroService
         return settings.EnableHighDensityMode
             ? Math.Max(1, settings.MaxHitsPerPlayerControlUpdate)
             : 1;
-    }
-
-    private bool TryGetMidspinGroup(
-        double effectiveTargetTimeSeconds,
-        out int groupEndIndex,
-        out int firstSeqId,
-        out int lastSeqId)
-    {
-        groupEndIndex = nextIndex + 1;
-        firstSeqId = plan[nextIndex].SeqId;
-        lastSeqId = firstSeqId;
-        bool hasMidspin = false;
-
-        for (int index = nextIndex; index < plan.Count; index++)
-        {
-            MacroPlanEntry candidate = plan[index];
-            double candidateTargetTimeSeconds = GetEffectiveTargetTimeSeconds(candidate);
-            if (Math.Abs(candidateTargetTimeSeconds - effectiveTargetTimeSeconds) > MidspinGroupTargetTimeThresholdSeconds)
-            {
-                break;
-            }
-
-            groupEndIndex = index + 1;
-            lastSeqId = candidate.SeqId;
-            hasMidspin |= candidate.IsMidspin;
-        }
-
-        return hasMidspin;
     }
 
     private bool TryGetDirectHitChordGroup(
