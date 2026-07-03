@@ -475,6 +475,7 @@ internal sealed class InternalMacroService
 
             int rawEntryCount = index - startIndex;
             double actualSpanMs = (last.TargetTimeSeconds - firstTargetTimeSeconds) * 1000.0;
+            bool isExactDuplicateGroup = rawEntryCount > 1 && actualSpanMs <= exactDuplicateEpsilonMs;
             if (rawEntryCount > 1 && actualSpanMs > maxSpanMs + 0.001)
             {
                 LogNormal($"pseudoChord rejected: span exceeds window. groupStartIndex={startIndex} groupEndIndex={index - 1} firstSeqID={first.SeqId} lastSeqID={last.SeqId} spanMs={actualSpanMs:F3} windowMs={windowMs:F3} maxSpanMs={maxSpanMs:F3}");
@@ -483,10 +484,13 @@ internal sealed class InternalMacroService
                 containsMidspin = first.IsMidspin;
                 isNearMidspin = first.IsNearMidspin;
                 rawEntryCount = 1;
+                isExactDuplicateGroup = false;
                 actualSpanMs = 0.0;
             }
 
-            int emittedHitCount = Math.Min(rawEntryCount, Math.Min(keyCapacity, maxHitsPerGroup));
+            int emittedHitCount = isExactDuplicateGroup
+                ? Math.Min(rawEntryCount, Math.Min(keyCapacity, maxHitsPerGroup))
+                : rawEntryCount;
             entries.Add(new InputPlanEntry(
                 startIndex,
                 index,
@@ -496,6 +500,7 @@ internal sealed class InternalMacroService
                 last.TargetTimeSeconds,
                 rawEntryCount,
                 Math.Max(1, emittedHitCount),
+                isExactDuplicateGroup,
                 containsMidspin,
                 isNearMidspin));
         }
@@ -879,7 +884,7 @@ internal sealed class InternalMacroService
 
                 if (inputEntry.IsPseudoChordGroup)
                 {
-                    if (TryFirePseudoChordGroup(inputEntry, clockSeconds, effectiveTargetTimeSeconds, diffMs, currentFloorSeqId, dueCount, out int afterGroupFloorSeqId))
+                    if (TryFirePseudoChordGroup(inputEntry, clockSeconds, currentFloorSeqId, dueCount, out int afterGroupFloorSeqId))
                     {
                         UpdateAdaptiveOffsetAfterDirectHit(diffMs, Math.Max(dueCount, inputEntry.RawEntryCount), entry);
                         nextIndex++;
@@ -1007,8 +1012,6 @@ internal sealed class InternalMacroService
     private bool TryFirePseudoChordGroup(
         InputPlanEntry entry,
         double clockSeconds,
-        double effectiveTargetTimeSeconds,
-        double diffMs,
         int currentFloorBefore,
         int dueCount,
         out int currentFloorAfter)
@@ -1031,11 +1034,13 @@ internal sealed class InternalMacroService
             }
 
             int targetSeqId = Math.Min(beforeFloorSeqId + 1, entry.LastSeqId);
+            double targetTimeSeconds = GetPseudoChordHitTargetTimeSeconds(entry, hitIndex);
+            double diffMs = (clockSeconds - targetTimeSeconds) * 1000.0;
             HitInvokeResult result = directHitInvoker.Invoke(
                 targetSeqId,
                 clockSeconds,
                 beforeFloorSeqId,
-                effectiveTargetTimeSeconds,
+                targetTimeSeconds,
                 forceReadAfterHit: true);
             LogHitResult(beforeFloorSeqId, result);
 
@@ -1057,10 +1062,44 @@ internal sealed class InternalMacroService
             PulseMacroKeyViewer();
         }
 
-        LogNormal(
-            $"pseudoChord compressed. groupStartIndex={entry.PlanStartIndex} groupEndIndex={entry.PlanEndIndexExclusive - 1} firstSeqID={entry.FirstSeqId} lastSeqID={entry.LastSeqId} seqID={entry.FirstSeqId}-{entry.LastSeqId} firstTargetTime={entry.FirstTargetTimeSeconds:F6}s lastTargetTime={entry.LastTargetTimeSeconds:F6}s rawEntryCount={entry.RawEntryCount} emittedHitCount={entry.EmittedHitCount} acceptedHitCount={acceptedHitCount} windowMs={settings.PseudoChordWindowMs:F3} spanMs={entry.SpanMs:F3} currentFloorBefore={currentFloorBefore} currentFloorAfter={currentFloorAfter} dueCount={dueCount} containsMidspin={entry.ContainsMidspin}");
+        LogPseudoChordResult(entry, acceptedHitCount, currentFloorBefore, currentFloorAfter, dueCount);
 
         return completed && (acceptedHitCount == entry.EmittedHitCount || currentFloorAfter >= entry.LastSeqId);
+    }
+
+    private double GetPseudoChordHitTargetTimeSeconds(InputPlanEntry entry, int hitIndex)
+    {
+        if (entry.IsExactDuplicateGroup)
+        {
+            return GetEffectiveTargetTimeSeconds(entry);
+        }
+
+        int planIndex = Math.Min(entry.PlanStartIndex + hitIndex, entry.PlanEndIndexExclusive - 1);
+        return GetEffectiveTargetTimeSeconds(plan[planIndex]);
+    }
+
+    private void LogPseudoChordResult(
+        InputPlanEntry entry,
+        int acceptedHitCount,
+        int currentFloorBefore,
+        int currentFloorAfter,
+        int dueCount)
+    {
+        string common = $"groupStartIndex={entry.PlanStartIndex} groupEndIndex={entry.PlanEndIndexExclusive - 1} firstSeqID={entry.FirstSeqId} lastSeqID={entry.LastSeqId} seqID={entry.FirstSeqId}-{entry.LastSeqId} firstTargetTime={entry.FirstTargetTimeSeconds:F6}s lastTargetTime={entry.LastTargetTimeSeconds:F6}s rawEntryCount={entry.RawEntryCount} emittedHitCount={entry.EmittedHitCount} acceptedHitCount={acceptedHitCount} windowMs={settings.PseudoChordWindowMs:F3} exactDuplicateEpsilonMs={settings.PseudoChordExactDuplicateEpsilonMs:F3} spanMs={entry.SpanMs:F3} currentFloorBefore={currentFloorBefore} currentFloorAfter={currentFloorAfter} dueCount={dueCount} containsMidspin={entry.ContainsMidspin}";
+
+        if (entry.IsExactDuplicateGroup && entry.IsCompressed)
+        {
+            LogNormal($"pseudoChord exact compressed. {common}");
+            return;
+        }
+
+        if (entry.IsExactDuplicateGroup)
+        {
+            LogNormal($"pseudoChord exact passthrough. {common} reason=not-compressed");
+            return;
+        }
+
+        LogNormal($"pseudoChord near passthrough. {common} reason=not-exact-duplicate");
     }
 
     private int AdvanceIndexPastCurrentFloor(int startIndex, int currentFloorSeqId)
