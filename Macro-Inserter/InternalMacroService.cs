@@ -58,7 +58,9 @@ internal sealed class InternalMacroService
     private double adaptiveOffsetMs;
     private double medianDispatchLagMs;
     private bool suppressNextAdaptiveCorrection;
+    private long macroKeyViewerHitCounter;
 
+    public MacroKeyViewerState MacroKeyViewer { get; } = new();
     public int HitDiffSampleCount => hitDiffSampleCount;
     public double AverageHitDiffMs => hitDiffSampleCount == 0 ? 0.0 : hitDiffTotalMs / hitDiffSampleCount;
     public double MaxAbsHitDiffMs => hitDiffMaxAbsMs;
@@ -807,6 +809,7 @@ internal sealed class InternalMacroService
                     UpdateAdaptiveOffsetAfterDirectHit(diffMs, dueCount, entry);
                     nextIndex++;
                     hitsThisUpdate++;
+                    PulseMacroKeyViewer();
                     if (!settings.EnableHighDensityMode)
                     {
                         break;
@@ -861,6 +864,25 @@ internal sealed class InternalMacroService
         return settings.EnableHighDensityMode
             ? Math.Max(1, settings.MaxHitsPerPlayerControlUpdate)
             : 1;
+    }
+
+    private void PulseMacroKeyViewer()
+    {
+        if (!settings.EnableMacroKeyViewer)
+        {
+            return;
+        }
+
+        IReadOnlyList<string> keys = MacroKeyViewer.ConfigureKeys(settings.MacroKeyViewerKeysText);
+        if (keys.Count == 0)
+        {
+            return;
+        }
+
+        int keyIndex = (int)(macroKeyViewerHitCounter % keys.Count);
+        macroKeyViewerHitCounter++;
+        double durationSeconds = Math.Max(0, settings.MacroKeyViewerPulseMs) / 1000.0;
+        MacroKeyViewer.Pulse(keys[keyIndex], durationSeconds);
     }
 
     private bool HandleDueCountTooLarge(int dueCount, int maxHitsThisUpdate, double clockSeconds)

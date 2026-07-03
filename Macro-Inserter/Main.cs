@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using HarmonyLib;
 using UnityEngine;
@@ -16,6 +17,8 @@ public static class Main
     private static string maxLateRetryMsText = "40";
     private static string maxHitsPerPlayerControlUpdateText = "8";
     private static string virtualInputKeyCountText = "1";
+    private static string macroKeyViewerPulseMsText = "80";
+    private static string macroKeyViewerScaleText = "1";
     private static bool enabled;
     private static float lastOnUpdateExceptionLogTime = -10.0f;
     private static string? lastOnUpdateExceptionSignature;
@@ -29,6 +32,8 @@ public static class Main
         maxLateRetryMsText = settings.MaxLateRetryMs.ToString(CultureInfo.InvariantCulture);
         maxHitsPerPlayerControlUpdateText = settings.MaxHitsPerPlayerControlUpdate.ToString(CultureInfo.InvariantCulture);
         virtualInputKeyCountText = settings.VirtualInputKeyCount.ToString(CultureInfo.InvariantCulture);
+        macroKeyViewerPulseMsText = settings.MacroKeyViewerPulseMs.ToString(CultureInfo.InvariantCulture);
+        macroKeyViewerScaleText = settings.MacroKeyViewerScale.ToString(CultureInfo.InvariantCulture);
         service = new InternalMacroService(settings, Log);
 
         harmony = new Harmony(entry.Info.Id);
@@ -172,6 +177,35 @@ public static class Main
         GUILayout.Label("ValidateAfterHit is for debugging only. Leave it off for normal runs.");
         settings.DirectHitIgnoreInput = GUILayout.Toggle(settings.DirectHitIgnoreInput, "DirectHitIgnoreInput");
 
+        settings.EnableMacroKeyViewer = GUILayout.Toggle(settings.EnableMacroKeyViewer, "EnableMacroKeyViewer");
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("MacroKeyViewerKeys", GUILayout.Width(140f));
+        settings.MacroKeyViewerKeysText = GUILayout.TextField(settings.MacroKeyViewerKeysText, GUILayout.Width(480f));
+        GUILayout.EndHorizontal();
+
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("MacroKeyViewerPulseMs", GUILayout.Width(140f));
+        macroKeyViewerPulseMsText = GUILayout.TextField(macroKeyViewerPulseMsText, GUILayout.Width(120f));
+        if (int.TryParse(macroKeyViewerPulseMsText, NumberStyles.Integer, CultureInfo.InvariantCulture, out int pulseMs))
+        {
+            settings.MacroKeyViewerPulseMs = Math.Max(0, pulseMs);
+        }
+        GUILayout.EndHorizontal();
+
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("MacroKeyViewerScale", GUILayout.Width(140f));
+        macroKeyViewerScaleText = GUILayout.TextField(macroKeyViewerScaleText, GUILayout.Width(120f));
+        if (float.TryParse(macroKeyViewerScaleText, NumberStyles.Float, CultureInfo.InvariantCulture, out float scale))
+        {
+            settings.MacroKeyViewerScale = Mathf.Clamp(scale, 0.5f, 3.0f);
+        }
+        GUILayout.EndHorizontal();
+
+        if (settings.EnableMacroKeyViewer && service != null)
+        {
+            DrawMacroKeyViewer(service.MacroKeyViewer);
+        }
+
         GUILayout.BeginHorizontal();
         GUILayout.Label("VirtualInputKey", GUILayout.Width(140f));
         settings.VirtualInputKey = GUILayout.TextField(settings.VirtualInputKey, GUILayout.Width(120f));
@@ -197,6 +231,67 @@ public static class Main
         }
 
         GUILayout.EndVertical();
+    }
+
+    private static void DrawMacroKeyViewer(MacroKeyViewerState state)
+    {
+        float scale = Mathf.Clamp(settings.MacroKeyViewerScale, 0.5f, 3.0f);
+        IReadOnlyList<MacroKeyViewerKeySnapshot> keys = state.GetSnapshot(settings.MacroKeyViewerKeysText);
+        if (keys.Count == 0)
+        {
+            return;
+        }
+
+        GUIStyle titleStyle = new(GUI.skin.label)
+        {
+            fontSize = Mathf.Max(11, Mathf.RoundToInt(13f * scale))
+        };
+        GUIStyle keyStyle = new(GUI.skin.label)
+        {
+            fontSize = Mathf.Max(10, Mathf.RoundToInt(12f * scale))
+        };
+        GUIStyle countStyle = new(GUI.skin.label)
+        {
+            fontSize = Mathf.Max(9, Mathf.RoundToInt(10f * scale))
+        };
+
+        int columns = Math.Max(1, Mathf.FloorToInt(8f / scale));
+        float keyWidth = 46f * scale;
+        float keyHeight = 40f * scale;
+
+        GUILayout.BeginVertical("box", GUILayout.Width(Mathf.Max(220f, columns * (keyWidth + 8f) + 16f)));
+        GUILayout.Label($"Macro KeyViewer  KPS {state.Kps:F0}", titleStyle);
+        for (int index = 0; index < keys.Count; index += columns)
+        {
+            GUILayout.BeginHorizontal();
+            for (int column = 0; column < columns && index + column < keys.Count; column++)
+            {
+                DrawMacroKey(keys[index + column], keyStyle, countStyle, keyWidth, keyHeight);
+            }
+
+            GUILayout.EndHorizontal();
+        }
+
+        GUILayout.EndVertical();
+    }
+
+    private static void DrawMacroKey(
+        MacroKeyViewerKeySnapshot key,
+        GUIStyle keyStyle,
+        GUIStyle countStyle,
+        float width,
+        float height)
+    {
+        Color previousBackground = GUI.backgroundColor;
+        GUI.backgroundColor = key.Pressed
+            ? new Color(0.4f, 0.85f, 1.0f, 1.0f)
+            : new Color(0.35f, 0.35f, 0.35f, 1.0f);
+
+        GUILayout.BeginVertical("box", GUILayout.Width(width), GUILayout.Height(height));
+        GUILayout.Label(key.Name, keyStyle, GUILayout.Width(width - 8f));
+        GUILayout.Label(key.Count.ToString(CultureInfo.InvariantCulture), countStyle, GUILayout.Width(width - 8f));
+        GUILayout.EndVertical();
+        GUI.backgroundColor = previousBackground;
     }
 
     private static void OnSaveGUI(UnityModManager.ModEntry entry)

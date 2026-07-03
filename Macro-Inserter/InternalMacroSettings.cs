@@ -24,6 +24,10 @@ public sealed class InternalMacroSettings : UnityModManager.ModSettings
     public bool DirectHitIgnoreInput = true;
     public string VirtualInputKey = "Space";
     public int VirtualInputKeyCount = 1;
+    public bool EnableMacroKeyViewer = false;
+    public string MacroKeyViewerKeysText = "A B C D E F G H I J K L Q R S T";
+    public int MacroKeyViewerPulseMs = 80;
+    public float MacroKeyViewerScale = 1.0f;
 
     public override void Save(UnityModManager.ModEntry modEntry)
     {
