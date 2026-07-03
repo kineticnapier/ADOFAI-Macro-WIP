@@ -1,31 +1,35 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Reflection;
-using System.Runtime.CompilerServices;
 using HarmonyLib;
+using UnityEngine;
 
-#if !NET5_0_OR_GREATER
-namespace System.Runtime.CompilerServices
-{
-    [AttributeUsage(AttributeTargets.Method, Inherited = false)]
-    internal sealed class ModuleInitializerAttribute : Attribute
-    {
-    }
-}
-#endif
+namespace Macro_Inserter;
 
-namespace Macro_Inserter
-{
-
+// Runtime compatibility patch for the current InternalMacroService implementation.
+// It replaces BuildInputPlan and TryFirePseudoChordGroup without requiring a full
+// InternalMacroService.cs replacement.
 internal static class PseudoChordInputPlanFix
 {
-    private static readonly Harmony Harmony = new("Macro-Inserter.PseudoChordInputPlanFix");
+    private static readonly Harmony Harmony = new("Macro-Inserter.PseudoChordInputPlanFix.v3");
     private static readonly FieldInfo? SettingsField = AccessTools.Field(typeof(InternalMacroService), "settings");
     private static readonly FieldInfo? LogField = AccessTools.Field(typeof(InternalMacroService), "log");
+    private static readonly FieldInfo? DirectHitInvokerField = AccessTools.Field(typeof(InternalMacroService), "directHitInvoker");
+    private static readonly MethodInfo? TryReadCurrentFloorSeqIdMethod = AccessTools.Method(typeof(InternalMacroService), "TryReadCurrentFloorSeqId");
+    private static readonly MethodInfo? LogHitResultMethod = AccessTools.Method(typeof(InternalMacroService), "LogHitResult");
+    private static readonly MethodInfo? RecordHitDiffMethod = AccessTools.Method(typeof(InternalMacroService), "RecordHitDiff");
+    private static readonly MethodInfo? PulseMacroKeyViewerMethod = AccessTools.Method(typeof(InternalMacroService), "PulseMacroKeyViewer");
+
     private static bool patched;
 
-    [ModuleInitializer]
-    internal static void Initialize()
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterAssembliesLoaded)]
+    private static void RuntimeInitialize()
+    {
+        Install("RuntimeInitializeOnLoadMethod");
+    }
+
+    internal static void Install(string reason)
     {
         if (patched)
         {
@@ -34,29 +38,44 @@ internal static class PseudoChordInputPlanFix
 
         try
         {
-            MethodInfo? original = AccessTools.Method(
+            MethodInfo? buildOriginal = AccessTools.Method(
                 typeof(InternalMacroService),
                 "BuildInputPlan",
                 new[] { typeof(IReadOnlyList<MacroPlanEntry>) });
-            MethodInfo? prefix = AccessTools.Method(typeof(PseudoChordInputPlanFix), nameof(BuildInputPlanPrefix));
-            if (original == null || prefix == null)
+            MethodInfo? buildPrefix = AccessTools.Method(typeof(PseudoChordInputPlanFix), nameof(BuildInputPlanPrefix));
+
+            MethodInfo? fireOriginal = AccessTools.Method(
+                typeof(InternalMacroService),
+                "TryFirePseudoChordGroup",
+                new[]
+                {
+                    typeof(InputPlanEntry),
+                    typeof(double),
+                    typeof(double),
+                    typeof(double),
+                    typeof(int),
+                    typeof(int),
+                    typeof(int).MakeByRefType()
+                });
+            MethodInfo? firePrefix = AccessTools.Method(typeof(PseudoChordInputPlanFix), nameof(TryFirePseudoChordGroupPrefix));
+
+            if (buildOriginal == null || buildPrefix == null || fireOriginal == null || firePrefix == null)
             {
+                Debug.Log("[Macro-Inserter] PseudoChordInputPlanFix not installed: target method not found.");
                 return;
             }
 
-            Harmony.Patch(original, prefix: new HarmonyMethod(prefix));
+            Harmony.Patch(buildOriginal, prefix: new HarmonyMethod(buildPrefix));
+            Harmony.Patch(fireOriginal, prefix: new HarmonyMethod(firePrefix));
             patched = true;
+            Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix installed by {reason}.");
         }
-        catch
+        catch (Exception ex)
         {
-            // Avoid breaking mod load if this compatibility patch cannot be installed.
+            Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix install failed: {ex}");
         }
     }
 
-    // Replacement for InternalMacroService.BuildInputPlan.
-    // Only exact-duplicate groups that actually reduce hit count remain grouped.
-    // Near pseudo-chords and exact groups with rawEntryCount == emittedHitCount are expanded
-    // into normal single InputPlanEntry items so the scheduler cannot skip hidden entries.
     private static bool BuildInputPlanPrefix(
         InternalMacroService __instance,
         IReadOnlyList<MacroPlanEntry> macroPlan,
@@ -70,6 +89,76 @@ internal static class PseudoChordInputPlanFix
         }
 
         __result = BuildInputPlan(macroPlan, settings, log);
+        return false;
+    }
+
+    private static bool TryFirePseudoChordGroupPrefix(
+        InternalMacroService __instance,
+        InputPlanEntry entry,
+        double clockSeconds,
+        double effectiveTargetTimeSeconds,
+        double diffMs,
+        int currentFloorBefore,
+        int dueCount,
+        ref int currentFloorAfter,
+        ref bool __result)
+    {
+        DirectHitInvoker? directHitInvoker = DirectHitInvokerField?.GetValue(__instance) as DirectHitInvoker;
+        Action<string>? log = LogField?.GetValue(__instance) as Action<string>;
+        if (directHitInvoker == null)
+        {
+            return true;
+        }
+
+        currentFloorAfter = currentFloorBefore;
+        int acceptedHitCount = 0;
+        bool completed = true;
+
+        for (int hitIndex = 0; hitIndex < entry.EmittedHitCount; hitIndex++)
+        {
+            int beforeFloorSeqId = currentFloorAfter;
+            if (TryReadCurrentFloorSeqId(__instance, out int verifiedBeforeFloorSeqId))
+            {
+                beforeFloorSeqId = verifiedBeforeFloorSeqId;
+            }
+
+            if (beforeFloorSeqId >= entry.LastSeqId)
+            {
+                currentFloorAfter = beforeFloorSeqId;
+                break;
+            }
+
+            int targetSeqId = Math.Min(beforeFloorSeqId + 1, entry.LastSeqId);
+            double hitTargetTimeSeconds = entry.GetHitTargetTimeSeconds(hitIndex);
+            HitInvokeResult result = directHitInvoker.Invoke(
+                targetSeqId,
+                clockSeconds,
+                beforeFloorSeqId,
+                hitTargetTimeSeconds,
+                forceReadAfterHit: true);
+            InvokeLogHitResult(__instance, beforeFloorSeqId, result);
+
+            currentFloorAfter = result.AfterFloorSeqId;
+            if (currentFloorAfter < 0 && TryReadCurrentFloorSeqId(__instance, out int verifiedAfterFloorSeqId))
+            {
+                currentFloorAfter = verifiedAfterFloorSeqId;
+            }
+
+            if (!result.Accepted)
+            {
+                completed = false;
+                break;
+            }
+
+            acceptedHitCount++;
+            InvokeRecordHitDiff(__instance, (clockSeconds - hitTargetTimeSeconds) * 1000.0);
+            InvokePulseMacroKeyViewer(__instance);
+        }
+
+        log?.Invoke(
+            $"pseudoChord duplicate-cluster compressed. groupStartIndex={entry.PlanStartIndex} groupEndIndex={entry.PlanEndIndexExclusive - 1} firstSeqID={entry.FirstSeqId} lastSeqID={entry.LastSeqId} seqID={entry.FirstSeqId}-{entry.LastSeqId} firstTargetTime={entry.FirstTargetTimeSeconds:F6}s lastTargetTime={entry.LastTargetTimeSeconds:F6}s rawEntryCount={entry.RawEntryCount} emittedHitCount={entry.EmittedHitCount} acceptedHitCount={acceptedHitCount} windowMs=<patched> spanMs={entry.SpanMs:F3} currentFloorBefore={currentFloorBefore} currentFloorAfter={currentFloorAfter} dueCount={dueCount} containsMidspin={entry.ContainsMidspin} hitTargetTimes={FormatHitTargetTimes(entry)}");
+
+        __result = completed && (acceptedHitCount == entry.EmittedHitCount || currentFloorAfter >= entry.LastSeqId);
         return false;
     }
 
@@ -108,8 +197,8 @@ internal static class PseudoChordInputPlanFix
             {
                 MacroPlanEntry candidate = macroPlan[index];
                 double spanMs = (candidate.TargetTimeSeconds - firstTargetTimeSeconds) * 1000.0;
-                bool isExactDuplicate = Math.Abs(spanMs) <= exactDuplicateEpsilonMs;
-                if (!isExactDuplicate && spanMs > windowMs)
+                bool isExactDuplicateOfFirst = Math.Abs(spanMs) <= exactDuplicateEpsilonMs;
+                if (!isExactDuplicateOfFirst && spanMs > windowMs)
                 {
                     break;
                 }
@@ -121,36 +210,33 @@ internal static class PseudoChordInputPlanFix
             }
 
             int rawEntryCount = index - startIndex;
-            double actualSpanMs = (last.TargetTimeSeconds - firstTargetTimeSeconds) * 1000.0;
             if (rawEntryCount == 1)
             {
                 AddSingleInputPlanEntry(entries, macroPlan, startIndex);
                 continue;
             }
 
+            double actualSpanMs = (last.TargetTimeSeconds - firstTargetTimeSeconds) * 1000.0;
             if (actualSpanMs > maxSpanMs + 0.001)
             {
-                LogNormal(log, $"pseudoChord rejected: span exceeds window. groupStartIndex={startIndex} groupEndIndex={index - 1} firstSeqID={first.SeqId} lastSeqID={last.SeqId} spanMs={actualSpanMs:F3} windowMs={windowMs:F3} maxSpanMs={maxSpanMs:F3}");
+                Log(log, $"pseudoChord rejected: span exceeds window. groupStartIndex={startIndex} groupEndIndex={index - 1} firstSeqID={first.SeqId} lastSeqID={last.SeqId} spanMs={actualSpanMs:F3} windowMs={windowMs:F3} maxSpanMs={maxSpanMs:F3}");
                 AddSingleInputPlanEntry(entries, macroPlan, startIndex);
                 index = startIndex + 1;
                 continue;
             }
 
-            bool isExactDuplicateGroup = actualSpanMs <= exactDuplicateEpsilonMs + 0.000001;
-            int emittedHitCount = isExactDuplicateGroup
-                ? Math.Min(rawEntryCount, Math.Min(keyCapacity, maxHitsPerGroup))
-                : rawEntryCount;
-            bool isCompressed = isExactDuplicateGroup && emittedHitCount < rawEntryCount;
+            IReadOnlyList<double> clusterTargetTimes = BuildExactTimeClusters(macroPlan, startIndex, index, exactDuplicateEpsilonMs);
+            int emittedHitCount = Math.Min(clusterTargetTimes.Count, Math.Min(keyCapacity, maxHitsPerGroup));
+            bool isCompressed = emittedHitCount < rawEntryCount;
 
             if (!isCompressed)
             {
-                string kind = isExactDuplicateGroup ? "exact" : "near";
-                string reason = isExactDuplicateGroup ? "not-compressed" : "not-exact-duplicate";
-                LogNormal(log, $"pseudoChord {kind} passthrough expanded. groupStartIndex={startIndex} groupEndIndex={index - 1} firstSeqID={first.SeqId} lastSeqID={last.SeqId} firstTargetTime={first.TargetTimeSeconds:F6}s lastTargetTime={last.TargetTimeSeconds:F6}s rawEntryCount={rawEntryCount} emittedIndividualEntries={rawEntryCount} windowMs={windowMs:F3} exactDuplicateEpsilonMs={exactDuplicateEpsilonMs:F3} spanMs={actualSpanMs:F3} reason={reason}");
+                Log(log, $"pseudoChord passthrough expanded. groupStartIndex={startIndex} groupEndIndex={index - 1} firstSeqID={first.SeqId} lastSeqID={last.SeqId} firstTargetTime={first.TargetTimeSeconds:F6}s lastTargetTime={last.TargetTimeSeconds:F6}s rawEntryCount={rawEntryCount} emittedIndividualEntries={rawEntryCount} clusterCount={clusterTargetTimes.Count} windowMs={windowMs:F3} exactDuplicateEpsilonMs={exactDuplicateEpsilonMs:F3} spanMs={actualSpanMs:F3} reason=no-duplicate-cluster-compression");
                 AddIndividualInputPlanEntries(entries, macroPlan, startIndex, index);
                 continue;
             }
 
+            List<double> emittedTargetTimes = clusterTargetTimes.Take(emittedHitCount).ToList();
             entries.Add(new InputPlanEntry(
                 startIndex,
                 index,
@@ -162,13 +248,44 @@ internal static class PseudoChordInputPlanFix
                 Math.Max(1, emittedHitCount),
                 containsMidspin,
                 isNearMidspin,
-                isExactDuplicateGroup: true,
-                isCompressed: true));
+                isExactDuplicateGroup: actualSpanMs <= exactDuplicateEpsilonMs + 0.000001,
+                isCompressed: true,
+                hitTargetTimeSeconds: emittedTargetTimes));
 
-            LogNormal(log, $"pseudoChord exact compressed planned. groupStartIndex={startIndex} groupEndIndex={index - 1} firstSeqID={first.SeqId} lastSeqID={last.SeqId} firstTargetTime={first.TargetTimeSeconds:F6}s lastTargetTime={last.TargetTimeSeconds:F6}s rawEntryCount={rawEntryCount} emittedHitCount={emittedHitCount} windowMs={windowMs:F3} exactDuplicateEpsilonMs={exactDuplicateEpsilonMs:F3} spanMs={actualSpanMs:F3}");
+            Log(log, $"pseudoChord duplicate-cluster planned. groupStartIndex={startIndex} groupEndIndex={index - 1} firstSeqID={first.SeqId} lastSeqID={last.SeqId} firstTargetTime={first.TargetTimeSeconds:F6}s lastTargetTime={last.TargetTimeSeconds:F6}s rawEntryCount={rawEntryCount} emittedHitCount={emittedHitCount} clusterCount={clusterTargetTimes.Count} windowMs={windowMs:F3} exactDuplicateEpsilonMs={exactDuplicateEpsilonMs:F3} spanMs={actualSpanMs:F3} hitTargetTimes={FormatHitTargetTimes(emittedTargetTimes)}");
         }
 
         return entries;
+    }
+
+    private static IReadOnlyList<double> BuildExactTimeClusters(
+        IReadOnlyList<MacroPlanEntry> macroPlan,
+        int startIndex,
+        int endIndexExclusive,
+        double exactDuplicateEpsilonMs)
+    {
+        List<double> targetTimes = new();
+        if (startIndex >= endIndexExclusive)
+        {
+            return targetTimes;
+        }
+
+        double currentClusterTime = macroPlan[startIndex].TargetTimeSeconds;
+        targetTimes.Add(currentClusterTime);
+        for (int index = startIndex + 1; index < endIndexExclusive; index++)
+        {
+            double candidateTime = macroPlan[index].TargetTimeSeconds;
+            double deltaMs = Math.Abs(candidateTime - currentClusterTime) * 1000.0;
+            if (deltaMs <= exactDuplicateEpsilonMs)
+            {
+                continue;
+            }
+
+            currentClusterTime = candidateTime;
+            targetTimes.Add(currentClusterTime);
+        }
+
+        return targetTimes;
     }
 
     private static int GetPseudoChordKeyCapacity(InternalMacroSettings settings, int fallback)
@@ -214,9 +331,56 @@ internal static class PseudoChordInputPlanFix
             isCompressed: false));
     }
 
-    private static void LogNormal(Action<string>? log, string message)
+    private static bool TryReadCurrentFloorSeqId(InternalMacroService instance, out int currentFloorSeqId)
+    {
+        currentFloorSeqId = -1;
+        if (TryReadCurrentFloorSeqIdMethod == null)
+        {
+            return false;
+        }
+
+        object[] args = { currentFloorSeqId };
+        object? result = TryReadCurrentFloorSeqIdMethod.Invoke(instance, args);
+        if (args.Length > 0 && args[0] is int readFloor)
+        {
+            currentFloorSeqId = readFloor;
+        }
+
+        return result is bool boolResult && boolResult;
+    }
+
+    private static void InvokeLogHitResult(InternalMacroService instance, int currentFloorSeqId, HitInvokeResult result)
+    {
+        LogHitResultMethod?.Invoke(instance, new object[] { currentFloorSeqId, result });
+    }
+
+    private static void InvokeRecordHitDiff(InternalMacroService instance, double diffMs)
+    {
+        RecordHitDiffMethod?.Invoke(instance, new object[] { diffMs });
+    }
+
+    private static void InvokePulseMacroKeyViewer(InternalMacroService instance)
+    {
+        PulseMacroKeyViewerMethod?.Invoke(instance, Array.Empty<object>());
+    }
+
+    private static void Log(Action<string>? log, string message)
     {
         log?.Invoke(message);
     }
-}
+
+    private static string FormatHitTargetTimes(InputPlanEntry entry)
+    {
+        return FormatHitTargetTimes(entry.HitTargetTimeSeconds);
+    }
+
+    private static string FormatHitTargetTimes(IReadOnlyList<double> targetTimes)
+    {
+        if (targetTimes.Count == 0)
+        {
+            return "<none>";
+        }
+
+        return string.Join(",", targetTimes.Select(time => time.ToString("F6")));
+    }
 }

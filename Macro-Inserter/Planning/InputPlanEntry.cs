@@ -1,3 +1,6 @@
+using System;
+using System.Collections.Generic;
+
 namespace Macro_Inserter;
 
 internal sealed class InputPlanEntry
@@ -14,7 +17,8 @@ internal sealed class InputPlanEntry
         bool containsMidspin,
         bool isNearMidspin,
         bool isExactDuplicateGroup = false,
-        bool isCompressed = false)
+        bool isCompressed = false,
+        IReadOnlyList<double>? hitTargetTimeSeconds = null)
     {
         PlanStartIndex = planStartIndex;
         PlanEndIndexExclusive = planEndIndexExclusive;
@@ -23,11 +27,12 @@ internal sealed class InputPlanEntry
         FirstTargetTimeSeconds = firstTargetTimeSeconds;
         LastTargetTimeSeconds = lastTargetTimeSeconds;
         RawEntryCount = rawEntryCount;
-        EmittedHitCount = emittedHitCount;
+        EmittedHitCount = Math.Max(1, emittedHitCount);
         ContainsMidspin = containsMidspin;
         IsNearMidspin = isNearMidspin;
         IsExactDuplicateGroup = isExactDuplicateGroup;
         IsCompressed = isCompressed;
+        HitTargetTimeSeconds = hitTargetTimeSeconds ?? Array.Empty<double>();
     }
 
     public int PlanStartIndex { get; }
@@ -56,5 +61,27 @@ internal sealed class InputPlanEntry
 
     public bool IsCompressed { get; }
 
+    public IReadOnlyList<double> HitTargetTimeSeconds { get; }
+
     public bool IsPseudoChordGroup => RawEntryCount > 1 && IsCompressed;
+
+    public double GetHitTargetTimeSeconds(int hitIndex)
+    {
+        if (HitTargetTimeSeconds.Count == 0)
+        {
+            return FirstTargetTimeSeconds;
+        }
+
+        if (hitIndex < 0)
+        {
+            return HitTargetTimeSeconds[0];
+        }
+
+        if (hitIndex >= HitTargetTimeSeconds.Count)
+        {
+            return HitTargetTimeSeconds[HitTargetTimeSeconds.Count - 1];
+        }
+
+        return HitTargetTimeSeconds[hitIndex];
+    }
 }
