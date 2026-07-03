@@ -7,9 +7,8 @@ internal sealed class InputPlanEntry
 {
     static InputPlanEntry()
     {
-        // RuntimeInitializeOnLoadMethod can be timing-dependent under UMM.
-        // Keep this as a backup; the module initializer in PseudoChordInputPlanFix
-        // should normally install the patch before the scheduler is armed.
+        // RuntimeInitializeOnLoadMethod can be late or skipped depending on UMM load order.
+        // This is a fallback only; ModuleInitializer should install the BuildInputPlan patch first.
         PseudoChordInputPlanFix.Install("InputPlanEntry static constructor");
     }
 
@@ -27,37 +26,24 @@ internal sealed class InputPlanEntry
         bool isNearMidspin,
         bool isCompressed = false,
         IReadOnlyList<double>? hitTargetTimeSeconds = null,
-        IReadOnlyList<int>? hitExpectedAfterSeqIds = null,
-        IReadOnlyList<double>? hitAnglesDegrees = null)
+        IReadOnlyList<int>? expectedAfterSeqIds = null,
+        bool isChartFileChord = false)
     {
-        PlanStartIndex = planStartIndex;
-        PlanEndIndexExclusive = planEndIndexExclusive;
+        PlanStartIndex = Math.Max(0, planStartIndex);
+        PlanEndIndexExclusive = Math.Max(PlanStartIndex + 1, planEndIndexExclusive);
         FirstSeqId = firstSeqId;
         LastSeqId = lastSeqId;
         FirstTargetTimeSeconds = firstTargetTimeSeconds;
         LastTargetTimeSeconds = lastTargetTimeSeconds;
         RawEntryCount = Math.Max(1, rawEntryCount);
+        EmittedHitCount = Math.Max(1, emittedHitCount);
         IsExactDuplicateGroup = isExactDuplicateGroup;
         ContainsMidspin = containsMidspin;
         IsNearMidspin = isNearMidspin;
-
+        IsCompressed = isCompressed;
         HitTargetTimeSeconds = hitTargetTimeSeconds ?? Array.Empty<double>();
-        HitExpectedAfterSeqIds = hitExpectedAfterSeqIds ?? Array.Empty<int>();
-        HitAnglesDegrees = hitAnglesDegrees ?? Array.Empty<double>();
-
-        bool hasExplicitHitPlan = HitTargetTimeSeconds.Count > 0 || HitExpectedAfterSeqIds.Count > 0;
-        IsCompressed = isCompressed || hasExplicitHitPlan || (isExactDuplicateGroup && emittedHitCount < RawEntryCount);
-
-        if (IsCompressed)
-        {
-            int plannedHitCount = Math.Max(HitTargetTimeSeconds.Count, HitExpectedAfterSeqIds.Count);
-            EmittedHitCount = Math.Max(1, plannedHitCount > 0 ? plannedHitCount : emittedHitCount);
-        }
-        else
-        {
-            // Non-compressed groups are not allowed to silently drop floors.
-            EmittedHitCount = Math.Max(1, Math.Max(emittedHitCount, RawEntryCount));
-        }
+        ExpectedAfterSeqIds = expectedAfterSeqIds ?? Array.Empty<int>();
+        IsChartFileChord = isChartFileChord;
     }
 
     public int PlanStartIndex { get; }
@@ -86,17 +72,13 @@ internal sealed class InputPlanEntry
 
     public bool IsCompressed { get; }
 
+    public bool IsChartFileChord { get; }
+
     public IReadOnlyList<double> HitTargetTimeSeconds { get; }
 
-    public IReadOnlyList<int> HitExpectedAfterSeqIds { get; }
+    public IReadOnlyList<int> ExpectedAfterSeqIds { get; }
 
-    public IReadOnlyList<double> HitAnglesDegrees { get; }
-
-    public bool HasExplicitHitPlan => HitTargetTimeSeconds.Count > 0 || HitExpectedAfterSeqIds.Count > 0;
-
-    // Keep grouped firing enabled for explicit compressed plans and also for old
-    // grouped entries if a stale BuildInputPlan slips through before the patch.
-    public bool IsPseudoChordGroup => RawEntryCount > 1;
+    public bool IsPseudoChordGroup => RawEntryCount > 1 || IsChartFileChord;
 
     public double GetHitTargetTimeSeconds(int hitIndex)
     {
@@ -118,43 +100,23 @@ internal sealed class InputPlanEntry
         return HitTargetTimeSeconds[hitIndex];
     }
 
-    public int GetHitExpectedAfterSeqId(int hitIndex)
+    public int GetExpectedAfterSeqId(int hitIndex)
     {
-        if (HitExpectedAfterSeqIds.Count == 0)
+        if (ExpectedAfterSeqIds.Count == 0)
         {
-            return Math.Min(FirstSeqId + Math.Max(0, hitIndex), LastSeqId);
+            return LastSeqId;
         }
 
         if (hitIndex < 0)
         {
-            return HitExpectedAfterSeqIds[0];
+            return ExpectedAfterSeqIds[0];
         }
 
-        if (hitIndex >= HitExpectedAfterSeqIds.Count)
+        if (hitIndex >= ExpectedAfterSeqIds.Count)
         {
-            return HitExpectedAfterSeqIds[HitExpectedAfterSeqIds.Count - 1];
+            return ExpectedAfterSeqIds[ExpectedAfterSeqIds.Count - 1];
         }
 
-        return HitExpectedAfterSeqIds[hitIndex];
-    }
-
-    public double GetHitAngleDegrees(int hitIndex)
-    {
-        if (HitAnglesDegrees.Count == 0)
-        {
-            return double.NaN;
-        }
-
-        if (hitIndex < 0)
-        {
-            return HitAnglesDegrees[0];
-        }
-
-        if (hitIndex >= HitAnglesDegrees.Count)
-        {
-            return HitAnglesDegrees[HitAnglesDegrees.Count - 1];
-        }
-
-        return HitAnglesDegrees[hitIndex];
+        return ExpectedAfterSeqIds[hitIndex];
     }
 }
