@@ -28,11 +28,11 @@ internal static class ChartFileInputPlanBuilder
         if (TryResolveCurrentChartPath(log, out string resolvedPath))
         {
             chartPath = resolvedPath;
-            log($"Runtime input-pipeline plan v23: chart path resolved but AutoPlayTiles hints are ignored. path={resolvedPath}");
+            log($"Runtime input-pipeline plan v24: chart path resolved but AutoPlayTiles hints are ignored. path={resolvedPath}");
         }
         else
         {
-            log("Runtime input-pipeline plan v23: current .adofai path was not found; AutoPlayTiles hints are ignored.");
+            log("Runtime input-pipeline plan v24: current .adofai path was not found; AutoPlayTiles hints are ignored.");
         }
 
         HashSet<int> autoSeqIds = new HashSet<int>();
@@ -77,6 +77,7 @@ internal static class ChartFileInputPlanBuilder
         int inputPatchGroupCount = 0;
         int skippedAutoCount = 0;
         int skippedMidspinOnlyGroupCount = 0;
+        int splitNearOrdinaryGroupCount = 0;
         int maxRawGroupSize = 1;
         int maxKeyCount = 1;
         int index = 0;
@@ -113,7 +114,7 @@ internal static class ChartFileInputPlanBuilder
             // - UpdateHoldKeys consumes keyTimes and calls Hit(false).
             // - Hit(false) itself adds one extra keyTime when the landed floor is midspin.
             // Therefore external key count is runtime floors minus midspin floors.
-            // v23 deliberately ignores chart-file AutoPlayTiles hints because those hints can
+            // v24 deliberately ignores chart-file AutoPlayTiles hints because those hints can
             // remove long runtime floor ranges from the input plan even when gameplay still
             // requires the scheduler to bridge through them.
             List<RuntimePlanItem> externalKeyItems = group
@@ -126,6 +127,50 @@ internal static class ChartFileInputPlanBuilder
             if (keyCount <= 0)
             {
                 skippedMidspinOnlyGroupCount++;
+                continue;
+            }
+
+            bool isExactDuplicateGroup = Math.Abs(last.Entry.TargetTimeSeconds - first.Entry.TargetTimeSeconds) * 1000.0 <= exactEpsilonMs;
+
+            // v24 fix:
+            // Non-midspin groups that are merely close in time are not true simultaneous
+            // input groups. Treating them as one FirstSeqId-LastSeqId entry interacts
+            // badly with auto sections: the game can advance into the middle of the
+            // group by itself, the original floorGuard skips the whole group as
+            // "already inside group", and the scheduler gets stuck waiting for the
+            // next floor. Keep only exact duplicates and midspin/compressed groups as
+            // grouped entries; split ordinary near-time streams back into single
+            // runtime entries.
+            bool shouldSplitNearOrdinaryGroup =
+                count > 1 &&
+                !isExactDuplicateGroup &&
+                !containsMidspin &&
+                keyCount == count;
+
+            if (shouldSplitNearOrdinaryGroup)
+            {
+                splitNearOrdinaryGroupCount++;
+                foreach (RuntimePlanItem keyItem in externalKeyItems)
+                {
+                    result.Add(new InputPlanEntry(
+                        keyItem.PlanIndex,
+                        keyItem.PlanIndex + 1,
+                        keyItem.Entry.SeqId,
+                        keyItem.Entry.SeqId,
+                        keyItem.Entry.TargetTimeSeconds,
+                        keyItem.Entry.TargetTimeSeconds,
+                        rawEntryCount: 1,
+                        emittedHitCount: 1,
+                        isExactDuplicateGroup: false,
+                        containsMidspin: false,
+                        isNearMidspin: keyItem.Entry.IsNearMidspin,
+                        isCompressed: false,
+                        hitTargetTimeSeconds: new[] { keyItem.Entry.TargetTimeSeconds },
+                        expectedAfterSeqIds: new[] { keyItem.Entry.SeqId },
+                        isChartFileChord: false,
+                        useInputPatchPipeline: true));
+                }
+
                 continue;
             }
 
@@ -157,7 +202,7 @@ internal static class ChartFileInputPlanBuilder
                 last.Entry.TargetTimeSeconds,
                 rawEntryCount: count,
                 emittedHitCount: keyCount,
-                isExactDuplicateGroup: Math.Abs(last.Entry.TargetTimeSeconds - first.Entry.TargetTimeSeconds) * 1000.0 <= exactEpsilonMs,
+                isExactDuplicateGroup: isExactDuplicateGroup,
                 containsMidspin: containsMidspin,
                 isNearMidspin: containsMidspin,
                 isCompressed: keyCount < count,
@@ -169,7 +214,7 @@ internal static class ChartFileInputPlanBuilder
 
         string chartText = string.IsNullOrEmpty(chartPath) ? "<none>" : chartPath;
         log(
-            $"Runtime input-pipeline plan built. runtimeEntries={items.Count} inputEntries={result.Count} rawGroups={groupCount} inputPatchGroups={inputPatchGroupCount} maxRawGroupSize={maxRawGroupSize} maxKeyCount={maxKeyCount} groupingWindowMs={groupingWindowMs:F3} autoSeqIdsIgnored={autoSeqIds.Count} skippedAutoMembers={skippedAutoCount} skippedNoExternalKeyGroups={skippedMidspinOnlyGroupCount} chart={chartText}");
+            $"Runtime input-pipeline plan built. runtimeEntries={items.Count} inputEntries={result.Count} rawGroups={groupCount} inputPatchGroups={inputPatchGroupCount} maxRawGroupSize={maxRawGroupSize} maxKeyCount={maxKeyCount} groupingWindowMs={groupingWindowMs:F3} autoSeqIdsIgnored={autoSeqIds.Count} skippedAutoMembers={skippedAutoCount} skippedNoExternalKeyGroups={skippedMidspinOnlyGroupCount} splitNearOrdinaryGroups={splitNearOrdinaryGroupCount} chart={chartText}");
         return result;
     }
 

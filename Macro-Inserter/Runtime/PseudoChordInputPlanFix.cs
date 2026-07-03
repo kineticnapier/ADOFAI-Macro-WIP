@@ -17,7 +17,7 @@ namespace Macro_Inserter
 {
     internal static class PseudoChordInputPlanFix
     {
-        private static readonly Harmony Harmony = new Harmony("Macro-Inserter.PseudoChordInputPlanFix.v23");
+        private static readonly Harmony Harmony = new Harmony("Macro-Inserter.PseudoChordInputPlanFix.v24");
         private static readonly FieldInfo? SettingsField = AccessTools.Field(typeof(InternalMacroService), "settings");
         private static readonly FieldInfo? LogField = AccessTools.Field(typeof(InternalMacroService), "log");
         private static readonly MethodInfo? PulseMacroKeyViewerMethod = AccessTools.Method(typeof(InternalMacroService), "PulseMacroKeyViewer");
@@ -89,11 +89,11 @@ namespace Macro_Inserter
                 }
 
                 patched = buildPatched && firePatched;
-                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v23 installed by {reason}. buildPatched={buildPatched} firePatched={firePatched}");
+                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v24 installed by {reason}. buildPatched={buildPatched} firePatched={firePatched}");
             }
             catch (Exception ex)
             {
-                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v23 install failed: {ex}");
+                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v24 install failed: {ex}");
             }
         }
 
@@ -113,7 +113,7 @@ namespace Macro_Inserter
             {
                 // The runtime input-pipeline plan is executed through the original
                 // DirectHit branch because that is the only branch that calls
-                // TryFirePseudoChordGroup(). The v11/v12/v13/v14/v15/v17/v18/v20/v21/v23 prefix on that method
+                // TryFirePseudoChordGroup(). The v11/v12/v13/v14/v15/v17/v18/v20/v21/v23/v24 prefix on that method
                 // intercepts the call and schedules InputPatchState instead of
                 // calling scrController.Hit() directly.
                 //
@@ -182,7 +182,7 @@ namespace Macro_Inserter
             // v21 tried to use Hit(false) directly for every plain single. The logs
             // showed that it advanced currentFloor, but the game could still die
             // around 180-degree turns because this bypasses too much of the normal
-            // keyTimes/update path. v23 keeps directKeyTimes as the primary path for
+            // keyTimes/update path. v24 keeps directKeyTimes as the primary path for
             // every entry, and only uses DirectHit as a delayed emergency retry for a
             // plain single that is already stuck.
             bool plainSingle =
