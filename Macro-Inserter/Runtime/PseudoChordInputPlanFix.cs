@@ -14,7 +14,8 @@ namespace System.Runtime.CompilerServices
 }
 #endif
 
-namespace Macro_Inserter;
+namespace Macro_Inserter
+{
 
 internal static class PseudoChordInputPlanFix
 {
@@ -217,4 +218,5 @@ internal static class PseudoChordInputPlanFix
     {
         log?.Invoke(message);
     }
+}
 }
