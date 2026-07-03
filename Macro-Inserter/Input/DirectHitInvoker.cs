@@ -6,6 +6,18 @@ namespace Macro_Inserter;
 
 internal sealed class DirectHitInvoker
 {
+    private static readonly string[] TimeMemberKeywords =
+    {
+        "song",
+        "position",
+        "time",
+        "audio",
+        "dsp",
+        "offset",
+        "minus",
+        "pitch"
+    };
+
     private readonly InternalMacroSettings settings;
     private readonly Action<string> log;
     private MethodInfo? hitMethod;
@@ -13,11 +25,23 @@ internal sealed class DirectHitInvoker
     private Type? cachedConductorType;
     private TimeSpoofMemberAccessor? songPositionAccessor;
     private TimeSpoofMemberAccessor? songPositionMinusIAccessor;
+    private string? songPositionAccessorReason;
+    private string? songPositionMinusIAccessorReason;
+    private bool timeSpoofUnavailable;
+    private bool timeSpoofUnavailableLogged;
+    private bool conductorDebugMembersLogged;
 
     public DirectHitInvoker(InternalMacroSettings settings, Action<string> log)
     {
         this.settings = settings;
         this.log = log;
+    }
+
+    public void ResetRunState()
+    {
+        timeSpoofUnavailable = false;
+        timeSpoofUnavailableLogged = false;
+        conductorDebugMembersLogged = false;
     }
 
     public void Warmup()
@@ -99,7 +123,7 @@ internal sealed class DirectHitInvoker
 
     private TimeSpoofState? BeginTimeSpoof(double targetTimeSeconds)
     {
-        if (!settings.ExperimentalTimeSpoofForDirectHit)
+        if (!settings.ExperimentalTimeSpoofForDirectHit || timeSpoofUnavailable)
         {
             return null;
         }
@@ -109,34 +133,38 @@ internal sealed class DirectHitInvoker
             object? conductor = GetCachedConductor();
             if (conductor == null)
             {
-                LogNormal("timeSpoof failed: scrConductor.instance was not found.");
+                MarkTimeSpoofUnavailable("scrConductor.instance was not found.");
                 return null;
             }
 
             cachedConductor = conductor;
+            LogConductorTimeMembersOnce(conductor);
             if (!EnsureTimeSpoofAccessors(conductor.GetType()))
             {
-                LogNormal("timeSpoof failed: conductor songposition fields were not writable.");
+                MarkTimeSpoofUnavailable(
+                    "conductor songposition fields were not writable. " +
+                    $"songposition={songPositionAccessorReason ?? "<unknown>"}; " +
+                    $"songposition_minusi={songPositionMinusIAccessorReason ?? "<unknown>"}");
                 return null;
             }
 
             if (!songPositionAccessor!.TryGet(conductor, out object? oldSongPosition) ||
                 !songPositionMinusIAccessor!.TryGet(conductor, out object? oldSongPositionMinusI))
             {
-                LogNormal("timeSpoof failed: conductor songposition fields were not readable.");
+                MarkTimeSpoofUnavailable("conductor songposition fields were not readable.");
                 return null;
             }
 
             if (!songPositionAccessor.TrySet(conductor, targetTimeSeconds))
             {
-                LogNormal("timeSpoof failed: conductor songposition field was not writable.");
+                MarkTimeSpoofUnavailable("conductor songposition field was not writable.");
                 return null;
             }
 
             if (!songPositionMinusIAccessor.TrySet(conductor, targetTimeSeconds))
             {
                 songPositionAccessor.TrySet(conductor, oldSongPosition);
-                LogNormal("timeSpoof failed: conductor songposition_minusi field was not writable.");
+                MarkTimeSpoofUnavailable("conductor songposition_minusi field was not writable.");
                 return null;
             }
 
@@ -151,9 +179,21 @@ internal sealed class DirectHitInvoker
         }
         catch (Exception ex)
         {
-            LogNormal($"timeSpoof failed: {ex.GetType().Name}.");
+            MarkTimeSpoofUnavailable(ex.GetType().Name);
             return null;
         }
+    }
+
+    private void MarkTimeSpoofUnavailable(string reason)
+    {
+        timeSpoofUnavailable = true;
+        if (timeSpoofUnavailableLogged)
+        {
+            return;
+        }
+
+        timeSpoofUnavailableLogged = true;
+        LogNormal($"timeSpoof failed: {reason}");
     }
 
     private object? GetCachedConductor()
@@ -165,6 +205,100 @@ internal sealed class DirectHitInvoker
 
         cachedConductor ??= ReflectionCache.GetSingletonInstance("scrConductor");
         return cachedConductor;
+    }
+
+    private void LogConductorTimeMembersOnce(object conductor)
+    {
+        if (conductorDebugMembersLogged || settings.LoggingMode != LoggingMode.Verbose)
+        {
+            return;
+        }
+
+        conductorDebugMembersLogged = true;
+        Type type = conductor.GetType();
+        BindingFlags flags = BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
+        LogVerbose($"timeSpoof conductor member scan. type={type.FullName}");
+
+        foreach (FieldInfo field in type.GetFields(flags))
+        {
+            if (!IsTimeMemberName(field.Name))
+            {
+                continue;
+            }
+
+            bool canWrite = !field.IsInitOnly && !field.IsLiteral;
+            string currentValue = ReadFieldValueForLog(field, conductor);
+            LogVerbose($"timeSpoof candidate field name={field.Name} type={field.FieldType.FullName} canRead=True canWrite={canWrite} value={currentValue}");
+        }
+
+        foreach (PropertyInfo property in type.GetProperties(flags))
+        {
+            if (!IsTimeMemberName(property.Name) || property.GetIndexParameters().Length != 0)
+            {
+                continue;
+            }
+
+            bool canRead = property.GetGetMethod(nonPublic: true) != null;
+            bool canWrite = property.GetSetMethod(nonPublic: true) != null;
+            string currentValue = ReadPropertyValueForLog(property, conductor, canRead);
+            LogVerbose($"timeSpoof candidate property name={property.Name} type={property.PropertyType.FullName} canRead={canRead} canWrite={canWrite} value={currentValue}");
+        }
+    }
+
+    private static bool IsTimeMemberName(string name)
+    {
+        foreach (string keyword in TimeMemberKeywords)
+        {
+            if (name.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string ReadFieldValueForLog(FieldInfo field, object conductor)
+    {
+        try
+        {
+            object? value = field.GetValue(field.IsStatic ? null : conductor);
+            return FormatValueForLog(value);
+        }
+        catch (Exception ex)
+        {
+            return $"<read failed: {ex.GetType().Name}>";
+        }
+    }
+
+    private static string ReadPropertyValueForLog(PropertyInfo property, object conductor, bool canRead)
+    {
+        if (!canRead)
+        {
+            return "<no getter>";
+        }
+
+        try
+        {
+            MethodInfo getter = property.GetGetMethod(nonPublic: true)!;
+            object? value = property.GetValue(getter.IsStatic ? null : conductor, null);
+            return FormatValueForLog(value);
+        }
+        catch (Exception ex)
+        {
+            return $"<read failed: {ex.GetType().Name}>";
+        }
+    }
+
+    private static string FormatValueForLog(object? value)
+    {
+        if (value == null)
+        {
+            return "<null>";
+        }
+
+        string text = value.ToString() ?? "<null>";
+        return text.Length <= 120 ? text : text.Substring(0, 120);
     }
 
     private void WarmupTimeSpoofAccessors()
@@ -188,8 +322,8 @@ internal sealed class DirectHitInvoker
         }
 
         cachedConductorType = conductorType;
-        songPositionAccessor = TimeSpoofMemberAccessor.Create(conductorType, "songposition");
-        songPositionMinusIAccessor = TimeSpoofMemberAccessor.Create(conductorType, "songposition_minusi");
+        songPositionAccessor = TimeSpoofMemberAccessor.Create(conductorType, "songposition", out songPositionAccessorReason);
+        songPositionMinusIAccessor = TimeSpoofMemberAccessor.Create(conductorType, "songposition_minusi", out songPositionMinusIAccessorReason);
         return songPositionAccessor != null && songPositionMinusIAccessor != null;
     }
 
@@ -318,27 +452,45 @@ internal sealed class DirectHitInvoker
             this.setter = setter;
         }
 
-        public static TimeSpoofMemberAccessor? Create(Type ownerType, string memberName)
+        public static TimeSpoofMemberAccessor? Create(Type ownerType, string memberName, out string reason)
         {
             FieldInfo? field = ownerType.GetField(memberName, InstanceFlags);
             if (field != null)
             {
                 if (field.IsInitOnly || field.IsLiteral)
                 {
+                    reason = "member found but readonly field";
                     return null;
                 }
 
                 Func<object, object?> getter = CreateFieldGetter(field) ?? (instance => field.GetValue(instance));
                 Action<object, object?> setter = CreateFieldSetter(field) ?? ((instance, value) => field.SetValue(instance, CoerceValue(value, field.FieldType)));
+                reason = $"writable field type={field.FieldType.FullName}";
                 return new TimeSpoofMemberAccessor(field.FieldType, getter, setter);
             }
 
             PropertyInfo? property = ownerType.GetProperty(memberName, InstanceFlags);
-            if (property == null ||
-                property.GetIndexParameters().Length != 0 ||
-                property.GetGetMethod(nonPublic: true) == null ||
-                property.GetSetMethod(nonPublic: true) == null)
+            if (property == null)
             {
+                reason = "member not found";
+                return null;
+            }
+
+            if (property.GetIndexParameters().Length != 0)
+            {
+                reason = "property is indexed";
+                return null;
+            }
+
+            if (property.GetGetMethod(nonPublic: true) == null)
+            {
+                reason = "property has no getter";
+                return null;
+            }
+
+            if (property.GetSetMethod(nonPublic: true) == null)
+            {
+                reason = "property has no setter";
                 return null;
             }
 
@@ -346,6 +498,7 @@ internal sealed class DirectHitInvoker
                                                   (instance => property.GetValue(instance, null));
             Action<object, object?> propertySetter = CreatePropertySetter(property) ??
                                                      ((instance, value) => property.SetValue(instance, CoerceValue(value, property.PropertyType), null));
+            reason = $"writable property type={property.PropertyType.FullName}";
             return new TimeSpoofMemberAccessor(property.PropertyType, propertyGetter, propertySetter);
         }
 

@@ -383,6 +383,7 @@ internal sealed class InternalMacroService
         firstInputPatchScheduled = false;
         ResetHitDiffStats();
         ResetAdaptiveOffset();
+        directHitInvoker.ResetRunState();
         nextIndex = 0;
         ResetMacroKeyViewer();
         MacroPlanEntry firstEntry = plan[0];
