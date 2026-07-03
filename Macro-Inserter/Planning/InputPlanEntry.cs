@@ -11,9 +11,10 @@ internal sealed class InputPlanEntry
         double lastTargetTimeSeconds,
         int rawEntryCount,
         int emittedHitCount,
-        bool isExactDuplicateGroup,
         bool containsMidspin,
-        bool isNearMidspin)
+        bool isNearMidspin,
+        bool isExactDuplicateGroup = false,
+        bool isCompressed = false)
     {
         PlanStartIndex = planStartIndex;
         PlanEndIndexExclusive = planEndIndexExclusive;
@@ -23,9 +24,10 @@ internal sealed class InputPlanEntry
         LastTargetTimeSeconds = lastTargetTimeSeconds;
         RawEntryCount = rawEntryCount;
         EmittedHitCount = emittedHitCount;
-        IsExactDuplicateGroup = isExactDuplicateGroup;
         ContainsMidspin = containsMidspin;
         IsNearMidspin = isNearMidspin;
+        IsExactDuplicateGroup = isExactDuplicateGroup;
+        IsCompressed = isCompressed;
     }
 
     public int PlanStartIndex { get; }
@@ -46,15 +48,13 @@ internal sealed class InputPlanEntry
 
     public int EmittedHitCount { get; }
 
-    public bool IsExactDuplicateGroup { get; }
-
-    public bool IsNearPseudoChordGroup => IsPseudoChordGroup && !IsExactDuplicateGroup;
-
-    public bool IsCompressed => EmittedHitCount < RawEntryCount;
-
     public bool ContainsMidspin { get; }
 
     public bool IsNearMidspin { get; }
 
-    public bool IsPseudoChordGroup => RawEntryCount > 1;
+    public bool IsExactDuplicateGroup { get; }
+
+    public bool IsCompressed { get; }
+
+    public bool IsPseudoChordGroup => RawEntryCount > 1 && IsCompressed;
 }
