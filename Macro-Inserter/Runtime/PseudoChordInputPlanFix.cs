@@ -17,7 +17,7 @@ namespace Macro_Inserter
 {
     internal static class PseudoChordInputPlanFix
     {
-        private static readonly Harmony Harmony = new Harmony("Macro-Inserter.PseudoChordInputPlanFix.v11");
+        private static readonly Harmony Harmony = new Harmony("Macro-Inserter.PseudoChordInputPlanFix.v13");
         private static readonly FieldInfo? SettingsField = AccessTools.Field(typeof(InternalMacroService), "settings");
         private static readonly FieldInfo? LogField = AccessTools.Field(typeof(InternalMacroService), "log");
 
@@ -80,11 +80,11 @@ namespace Macro_Inserter
                 }
 
                 patched = buildPatched && firePatched;
-                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v11 installed by {reason}. buildPatched={buildPatched} firePatched={firePatched}");
+                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v13 installed by {reason}. buildPatched={buildPatched} firePatched={firePatched}");
             }
             catch (Exception ex)
             {
-                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v11 install failed: {ex}");
+                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v13 install failed: {ex}");
             }
         }
 
@@ -102,6 +102,23 @@ namespace Macro_Inserter
 
             if (ChartFileInputPlanBuilder.TryBuild(settings, log, macroPlan, out IReadOnlyList<InputPlanEntry> runtimeInputPlan))
             {
+                // The runtime input-pipeline plan is executed through the original
+                // DirectHit branch because that is the only branch that calls
+                // TryFirePseudoChordGroup(). The v11/v12 prefix on that method
+                // intercepts the call and schedules InputPatchState instead of
+                // calling scrController.Hit() directly.
+                //
+                // If the UI is left on FireMode.InputPatch, the original
+                // InputPatch branch bypasses TryFirePseudoChordGroup(), ignores
+                // InputPlanEntry.EmittedHitCount, uses settings.VirtualInputKeyCount,
+                // and advances nextIndex without confirming floor movement. That
+                // makes the scheduler desync and appear to stop.
+                if (settings.FireMode != FireMode.DirectHit)
+                {
+                    log($"Runtime input-pipeline plan active; forcing FireMode DirectHit branch. selectedFireMode={settings.FireMode} actualInjection=InputPatchState");
+                    settings.FireMode = FireMode.DirectHit;
+                }
+
                 __result = runtimeInputPlan;
                 return false;
             }
@@ -128,15 +145,22 @@ namespace Macro_Inserter
             int keyCount = Math.Max(1, entry.EmittedHitCount);
 
             // This runs from the PlayerControl_Update prefix. scrController then executes
-            // its normal Simulated_PlayerControl_Update order:
+            // its normal input pipeline during the original PlayerControl_Update body:
             //   HitAutoFloors -> CountValidKeysPressed -> keyTimes.Add(...)
             //   UpdateHoldKeys -> Hit(false)
-            // So midspin and hold behavior stays owned by the game instead of DirectHit.
+            //
+            // Important: do NOT report success to the original scheduler here.
+            // At prefix time the game has not consumed the virtual input yet, so advancing
+            // nextIndex immediately can desync when the input is missed or consumed later in
+            // the same Unity frame. Instead we schedule the frame input, return false, and
+            // let the next PlayerControl_Update confirm progress through the existing
+            // floorGuard path (currentFloor >= FirstSeqId). If the floor did not move, the
+            // same entry is retried until MaxLateRetryMs/Fault handling stops it.
             InputPatchState.BeginFrame(keyCount);
-            currentFloorAfter = entry.LastSeqId;
+            currentFloorAfter = currentFloorBefore;
             log?.Invoke(
-                $"runtimeInputPatch scheduled. keyCount={keyCount} seqID={entry.FirstSeqId}-{entry.LastSeqId} targetTime={entry.FirstTargetTimeSeconds:F6}s spanMs={entry.SpanMs:F3} rawEntryCount={entry.RawEntryCount} containsMidspin={entry.ContainsMidspin} currentFloorBefore={currentFloorBefore} expectedAfter={currentFloorAfter} dueCount={dueCount}");
-            __result = true;
+                $"runtimeInputPatch queued; waiting for floor confirmation. keyCount={keyCount} seqID={entry.FirstSeqId}-{entry.LastSeqId} targetTime={entry.FirstTargetTimeSeconds:F6}s spanMs={entry.SpanMs:F3} rawEntryCount={entry.RawEntryCount} containsMidspin={entry.ContainsMidspin} currentFloorBefore={currentFloorBefore} expectedAfter={entry.LastSeqId} dueCount={dueCount}");
+            __result = false;
             return false;
         }
     }
