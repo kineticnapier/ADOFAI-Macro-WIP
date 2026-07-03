@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -181,24 +182,37 @@ internal static class ChartFileInputPlanBuilder
     private static bool TryResolveCurrentChartPath(Action<string> log, out string path)
     {
         List<string> candidates = new List<string>();
+
+        // The reliable runtime path is exposed by the game as ADOBase.levelPath,
+        // which delegates to scnGame.instance.levelPath. Read this first before
+        // falling back to broad string scans; otherwise the process working
+        // directory can be mistaken for the current chart.
+        AddStaticKnownPathMembers("ADOBase", candidates, "levelPath");
+        AddSingletonKnownPathMembers("scnGame", candidates, "levelPath");
+        AddGcsCustomLevelPathCandidates(candidates);
+        AddEditorCustomLevelPathCandidates(candidates);
+
         foreach (string typeName in new[]
                  {
+                     "scnGame",
                      "scrLevelMaker",
                      "scrController",
                      "scnEditor",
                      "scrConductor",
-                     "ADOBase",
-                     "ADOLevel"
+                     "ADOLevel",
+                     "CustomLevel"
                  })
         {
             object? instance = ReflectionCache.GetSingletonInstance(typeName);
             if (instance != null)
             {
                 AddKnownPathMembers(instance, candidates);
+                AddNestedKnownPathMembers(instance, candidates, "customLevel", "levelData", "level", "loadedLevel");
                 AddStringMembersContainingAdofai(instance, candidates);
             }
         }
 
+        // Lowest-priority fallback only. This must never win over ADOBase/scnGame.
         AddWorkingDirectoryCandidates(candidates);
 
         foreach (string candidate in candidates.Distinct(StringComparer.OrdinalIgnoreCase))
@@ -206,6 +220,7 @@ internal static class ChartFileInputPlanBuilder
             if (TryNormalizeChartPath(candidate, out string normalized))
             {
                 path = normalized;
+                log($"Chart path resolved. path={normalized}");
                 return true;
             }
         }
@@ -213,10 +228,162 @@ internal static class ChartFileInputPlanBuilder
         path = string.Empty;
         if (candidates.Count > 0)
         {
-            log($"Chart path candidates did not resolve to an existing .adofai file. candidates={string.Join(" | ", candidates.Take(8).ToArray())}");
+            log($"Chart path candidates did not resolve to an existing .adofai file. candidates={string.Join(" | ", candidates.Take(16).ToArray())}");
+        }
+        else
+        {
+            log("Chart path candidates were empty.");
         }
 
         return false;
+    }
+
+    private static void AddStaticKnownPathMembers(string typeName, List<string> candidates, params string[] names)
+    {
+        Type? type = ReflectionCache.FindType(typeName);
+        if (type == null)
+        {
+            return;
+        }
+
+        object? raw = ReflectionCache.ReadMember(type, instance: null, names: names);
+        AddPathCandidate(raw, candidates);
+    }
+
+    private static void AddSingletonKnownPathMembers(string typeName, List<string> candidates, params string[] names)
+    {
+        object? instance = ReflectionCache.GetSingletonInstance(typeName);
+        if (instance == null)
+        {
+            return;
+        }
+
+        object? raw = ReflectionCache.ReadMember(instance, names);
+        AddPathCandidate(raw, candidates);
+    }
+
+    private static void AddGcsCustomLevelPathCandidates(List<string> candidates)
+    {
+        Type? gcsType = ReflectionCache.FindType("GCS");
+        if (gcsType == null)
+        {
+            return;
+        }
+
+        object? rawPaths = ReflectionCache.ReadMember(gcsType, instance: null, "customLevelPaths", "CustomLevelPaths");
+        int customLevelIndex = 0;
+        object? rawIndex = ReflectionCache.ReadMember(gcsType, instance: null, "customLevelIndex", "CustomLevelIndex");
+        if (rawIndex != null)
+        {
+            try
+            {
+                customLevelIndex = Convert.ToInt32(rawIndex);
+            }
+            catch
+            {
+                customLevelIndex = 0;
+            }
+        }
+
+        if (rawPaths is string[] stringArray)
+        {
+            if (customLevelIndex >= 0 && customLevelIndex < stringArray.Length)
+            {
+                AddPathCandidate(stringArray[customLevelIndex], candidates);
+            }
+
+            foreach (string value in stringArray)
+            {
+                AddPathCandidate(value, candidates);
+            }
+
+            return;
+        }
+
+        if (rawPaths is IEnumerable enumerable)
+        {
+            int index = 0;
+            List<string> values = new List<string>();
+            foreach (object? item in enumerable)
+            {
+                if (item is string value)
+                {
+                    values.Add(value);
+                }
+
+                index++;
+            }
+
+            if (customLevelIndex >= 0 && customLevelIndex < values.Count)
+            {
+                AddPathCandidate(values[customLevelIndex], candidates);
+            }
+
+            foreach (string value in values)
+            {
+                AddPathCandidate(value, candidates);
+            }
+        }
+    }
+
+    private static void AddEditorCustomLevelPathCandidates(List<string> candidates)
+    {
+        object? editor = ReflectionCache.GetSingletonInstance("scnEditor");
+        if (editor == null)
+        {
+            return;
+        }
+
+        object? customLevel = ReflectionCache.ReadMember(editor, "customLevel", "level", "levelData");
+        if (customLevel != null)
+        {
+            AddKnownPathMembers(customLevel, candidates);
+            AddStringMembersContainingAdofai(customLevel, candidates);
+        }
+    }
+
+    private static void AddNestedKnownPathMembers(object instance, List<string> candidates, params string[] memberNames)
+    {
+        foreach (string memberName in memberNames)
+        {
+            object? nested = ReflectionCache.ReadMember(instance, memberName);
+            if (nested == null)
+            {
+                continue;
+            }
+
+            AddKnownPathMembers(nested, candidates);
+            AddStringMembersContainingAdofai(nested, candidates);
+        }
+    }
+
+    private static void AddPathCandidate(object? raw, List<string> candidates)
+    {
+        if (raw == null)
+        {
+            return;
+        }
+
+        if (raw is string value)
+        {
+            candidates.Add(value);
+            return;
+        }
+
+        if (raw is IEnumerable enumerable && raw is not string)
+        {
+            foreach (object? item in enumerable)
+            {
+                if (item is string stringValue)
+                {
+                    candidates.Add(stringValue);
+                }
+            }
+
+            return;
+        }
+
+        candidates.Add(raw.ToString() ?? string.Empty);
     }
 
     private static void AddKnownPathMembers(object instance, List<string> candidates)
@@ -235,10 +402,7 @@ internal static class ChartFileInputPlanBuilder
             "fullPath",
             "songFilename",
             "levelFilename");
-        if (raw != null)
-        {
-            candidates.Add(raw.ToString() ?? string.Empty);
-        }
+        AddPathCandidate(raw, candidates);
     }
 
     private static void AddStringMembersContainingAdofai(object instance, List<string> candidates)

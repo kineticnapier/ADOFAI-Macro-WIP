@@ -17,7 +17,7 @@ namespace Macro_Inserter
 {
     internal static class PseudoChordInputPlanFix
     {
-        private static readonly Harmony Harmony = new Harmony("Macro-Inserter.PseudoChordInputPlanFix.v8");
+        private static readonly Harmony Harmony = new Harmony("Macro-Inserter.PseudoChordInputPlanFix.v9");
         private static readonly FieldInfo? SettingsField = AccessTools.Field(typeof(InternalMacroService), "settings");
         private static readonly FieldInfo? LogField = AccessTools.Field(typeof(InternalMacroService), "log");
 
@@ -80,11 +80,11 @@ namespace Macro_Inserter
                 }
 
                 patched = buildPatched && firePatched;
-                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v8 installed by {reason}. buildPatched={buildPatched} firePatched={firePatched}");
+                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v9 installed by {reason}. buildPatched={buildPatched} firePatched={firePatched}");
             }
             catch (Exception ex)
             {
-                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v8 install failed: {ex}");
+                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v9 install failed: {ex}");
             }
         }
 
@@ -106,8 +106,9 @@ namespace Macro_Inserter
                 return false;
             }
 
-            log("Chart file input plan unavailable; falling back to runtime floor input plan.");
-            return true;
+            log("Chart file input plan unavailable; runtime floor fallback is disabled to avoid unsafe pseudoChord over-hit/under-hit behavior.");
+            __result = Array.Empty<InputPlanEntry>();
+            return false;
         }
 
         private static bool TryFirePseudoChordGroupPrefix(
