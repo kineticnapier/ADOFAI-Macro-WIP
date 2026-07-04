@@ -39,6 +39,13 @@ public static class Main
     private static string keyViewerRainColorText = "#66D9FFFF";
     private static string keyViewerRainMaxSegmentsText = "512";
     private static string keyViewerRainYOffsetPxText = "2";
+    private static string naturalFingeringFoldDownMaxBpmText = "1000";
+    private static string naturalFingeringRaiseUpMaxBpmText = "500";
+    private static string fingeringNormalLogLimitText = "96";
+    private static string fingeringVerboseLogLimitText = "384";
+    private static string directKeyTimesLateSpikeLogMsText = "8";
+    private static string directKeyTimesProcessingSpikeLogMsText = "8";
+    private static string directKeyTimesSpikeLogMinIntervalMsText = "50";
     private static bool enabled;
     private static float lastOnUpdateExceptionLogTime = -10.0f;
     private static string? lastOnUpdateExceptionSignature;
@@ -79,6 +86,10 @@ public static class Main
         settings.KeyViewerRainColor = keyViewerRainColorText;
         keyViewerRainMaxSegmentsText = settings.KeyViewerRainMaxSegments.ToString(CultureInfo.InvariantCulture);
         keyViewerRainYOffsetPxText = settings.KeyViewerRainYOffsetPx.ToString(CultureInfo.InvariantCulture);
+        NaturalFingeringOptions.Load();
+        settings.LoggingMode = NormalizeLoggingMode(settings.LoggingMode);
+        NaturalFingeringOptions.LogMode = NaturalFingeringOptions.FromLoggingMode(settings.LoggingMode);
+        InitializeDiagnosticTextFields();
         service = new InternalMacroService(settings, Log);
         macroKeyViewerOverlay = MacroKeyViewerOverlay.Create(settings, () => service, () => enabled);
 
@@ -186,8 +197,13 @@ public static class Main
 
         GUILayout.BeginHorizontal();
         GUILayout.Label("LoggingMode", GUILayout.Width(140f));
-        settings.LoggingMode = (LoggingMode)GUILayout.Toolbar((int)settings.LoggingMode, new[] { "Minimal", "Normal", "Verbose" }, GUILayout.Width(360f));
+        int currentLogMode = Mathf.Clamp((int)settings.LoggingMode, 0, 3);
+        int nextLogMode = GUILayout.Toolbar(currentLogMode, new[] { "None", "Minimal", "Normal", "Verbose" }, GUILayout.Width(480f));
+        settings.LoggingMode = (LoggingMode)nextLogMode;
+        NaturalFingeringOptions.LogMode = NaturalFingeringOptions.FromLoggingMode(settings.LoggingMode);
         GUILayout.EndHorizontal();
+
+        DrawNaturalFingeringDiagnostics();
 
         GUILayout.BeginHorizontal();
         GUILayout.Label("FirstHitMode", GUILayout.Width(140f));
@@ -390,6 +406,52 @@ public static class Main
         GUILayout.EndVertical();
     }
 
+    private static LoggingMode NormalizeLoggingMode(LoggingMode mode)
+    {
+        return Enum.IsDefined(typeof(LoggingMode), mode) ? mode : LoggingMode.Minimal;
+    }
+
+    private static void InitializeDiagnosticTextFields()
+    {
+        naturalFingeringFoldDownMaxBpmText = NaturalFingeringOptions.FoldDownMaxBpm.ToString(CultureInfo.InvariantCulture);
+        naturalFingeringRaiseUpMaxBpmText = NaturalFingeringOptions.RaiseUpMaxBpm.ToString(CultureInfo.InvariantCulture);
+        fingeringNormalLogLimitText = NaturalFingeringOptions.FingeringNormalLogLimit.ToString(CultureInfo.InvariantCulture);
+        fingeringVerboseLogLimitText = NaturalFingeringOptions.FingeringVerboseLogLimit.ToString(CultureInfo.InvariantCulture);
+        directKeyTimesLateSpikeLogMsText = NaturalFingeringOptions.LateSpikeLogMs.ToString(CultureInfo.InvariantCulture);
+        directKeyTimesProcessingSpikeLogMsText = NaturalFingeringOptions.LagSpikeLogMs.ToString(CultureInfo.InvariantCulture);
+        directKeyTimesSpikeLogMinIntervalMsText = NaturalFingeringOptions.SpikeLogMinIntervalMs.ToString(CultureInfo.InvariantCulture);
+    }
+
+    private static void DrawNaturalFingeringDiagnostics()
+    {
+        GUILayout.Label("Natural fingering / directKeyTimes diagnostics");
+
+        NaturalFingeringOptions.EnableFingeringLog = GUILayout.Toggle(NaturalFingeringOptions.EnableFingeringLog, "EnableFingeringLog");
+        DrawDoubleSetting("VisualBpmFoldDownMax", ref naturalFingeringFoldDownMaxBpmText, 1.0, 8000.0, value => NaturalFingeringOptions.FoldDownMaxBpm = value);
+        DrawDoubleSetting("VisualBpmRaiseUpMax", ref naturalFingeringRaiseUpMaxBpmText, 1.0, 8000.0, value => NaturalFingeringOptions.RaiseUpMaxBpm = value);
+        DrawIntSetting("FingeringNormalLogLimit", ref fingeringNormalLogLimitText, 0, 4096, value => NaturalFingeringOptions.FingeringNormalLogLimit = value);
+        DrawIntSetting("FingeringVerboseLogLimit", ref fingeringVerboseLogLimitText, 0, 8192, value => NaturalFingeringOptions.FingeringVerboseLogLimit = value);
+
+        NaturalFingeringOptions.EnableLateSpikeLog = GUILayout.Toggle(NaturalFingeringOptions.EnableLateSpikeLog, "EnableLateSpikeLog");
+        DrawDoubleSetting("LateSpikeLogMs", ref directKeyTimesLateSpikeLogMsText, 0.1, 1000.0, value => NaturalFingeringOptions.LateSpikeLogMs = value);
+        NaturalFingeringOptions.EnableLagSpikeLog = GUILayout.Toggle(NaturalFingeringOptions.EnableLagSpikeLog, "EnableProcessingSpikeLog");
+        DrawDoubleSetting("ProcessingSpikeLogMs", ref directKeyTimesProcessingSpikeLogMsText, 0.1, 1000.0, value => NaturalFingeringOptions.LagSpikeLogMs = value);
+        DrawDoubleSetting("SpikeLogMinIntervalMs", ref directKeyTimesSpikeLogMinIntervalMsText, 0.0, 5000.0, value => NaturalFingeringOptions.SpikeLogMinIntervalMs = value);
+        GUILayout.Label("Fingering detail logs require LoggingMode Normal/Verbose. Spike logs require LoggingMode Minimal or higher.");
+    }
+
+    private static void DrawDoubleSetting(string label, ref string text, double min, double max, Action<double> apply)
+    {
+        GUILayout.BeginHorizontal();
+        GUILayout.Label(label, GUILayout.Width(180f));
+        text = GUILayout.TextField(text, GUILayout.Width(120f));
+        if (double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out double value))
+        {
+            apply(Math.Max(min, Math.Min(max, value)));
+        }
+        GUILayout.EndHorizontal();
+    }
+
     private static void DrawFloatSetting(string label, ref string text, float min, float max, Action<float> apply)
     {
         GUILayout.BeginHorizontal();
@@ -426,6 +488,7 @@ public static class Main
 
     private static void OnSaveGUI(UnityModManager.ModEntry entry)
     {
+        NaturalFingeringOptions.Save();
         settings.Save(entry);
     }
 

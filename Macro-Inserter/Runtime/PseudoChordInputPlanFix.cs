@@ -18,7 +18,7 @@ namespace Macro_Inserter
 {
     internal static class PseudoChordInputPlanFix
     {
-        private static readonly Harmony Harmony = new Harmony("Macro-Inserter.PseudoChordInputPlanFix.v42");
+        private static readonly Harmony Harmony = new Harmony("Macro-Inserter.PseudoChordInputPlanFix.v43");
         private static readonly FieldInfo? SettingsField = AccessTools.Field(typeof(InternalMacroService), "settings");
         private static readonly FieldInfo? LogField = AccessTools.Field(typeof(InternalMacroService), "log");
         private static readonly FieldInfo? InputPlanField = AccessTools.Field(typeof(InternalMacroService), "inputPlan");
@@ -37,6 +37,8 @@ namespace Macro_Inserter
         private static double lastDirectKeyTimesSummaryRealtime;
         private static int stuckPlainSingleSeqId = -1;
         private static int stuckPlainSingleAttemptCount;
+        private static double lastDirectKeyTimesSpikeLogRealtime = -10.0;
+        private static int directKeyTimesSpikeLogSuppressed;
 
         private static bool patched;
         private static bool patchAttempted;
@@ -100,11 +102,11 @@ namespace Macro_Inserter
                 }
 
                 patched = buildPatched && firePatched;
-                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v42 installed by {reason}. buildPatched={buildPatched} firePatched={firePatched} rainOverlay=True uiPatchDisabled=True loadPatchDisabled=True logPatchDisabled=True");
+                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v43 installed by {reason}. buildPatched={buildPatched} firePatched={firePatched} rainOverlay=True uiPatchDisabled=True loadPatchDisabled=True logPatchDisabled=True");
             }
             catch (Exception ex)
             {
-                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v42 install failed: {ex}");
+                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v43 install failed: {ex}");
             }
         }
 
@@ -232,7 +234,7 @@ namespace Macro_Inserter
                     currentFloorAfter = burstAfterFloor;
                     PulseMacroKeyViewer(__instance, entry, burstKeyCount);
                     RecordDirectKeyTimesSummary(log, burstKeyCount, currentFloorBefore, burstAfterFloor, asyncInputActive);
-                    LogLagSpikeIfNeeded(log, "burst", prefixStartRealtime, prefixStartMemory, keyCount, burstKeyCount, dueCount, currentFloorBefore, burstAfterFloor, entry.FirstSeqId, entry.LastSeqId, asyncInputActive);
+                    LogDirectKeyTimesSpikeIfNeeded(__instance, log, "burst", prefixStartRealtime, prefixStartMemory, keyCount, burstKeyCount, dueCount, currentFloorBefore, burstAfterFloor, entry.FirstSeqId, entry.LastSeqId, entry.FirstTargetTimeSeconds, clockSeconds, asyncInputActive);
                     if (burstAfterFloor < burstTargetSeqId)
                     {
                         LogNormal(log, $"directKeyTimes burst partial. dueCount={dueCount} burstEntries={burstEntryCount} burstKeys={burstKeyCount} targetAfter={burstTargetSeqId} currentFloorBefore={currentFloorBefore} afterFloor={burstAfterFloor}");
@@ -258,7 +260,7 @@ namespace Macro_Inserter
                 currentFloorAfter = afterFloor;
                 PulseMacroKeyViewer(__instance, entry, keyCount);
                 RecordDirectKeyTimesSummary(log, keyCount, currentFloorBefore, afterFloor, asyncInputActive);
-                LogLagSpikeIfNeeded(log, "directKeyTimes", prefixStartRealtime, prefixStartMemory, keyCount, keyCount, dueCount, currentFloorBefore, afterFloor, entry.FirstSeqId, entry.LastSeqId, asyncInputActive);
+                LogDirectKeyTimesSpikeIfNeeded(__instance, log, "directKeyTimes", prefixStartRealtime, prefixStartMemory, keyCount, keyCount, dueCount, currentFloorBefore, afterFloor, entry.FirstSeqId, entry.LastSeqId, entry.FirstTargetTimeSeconds, clockSeconds, asyncInputActive);
                 __result = true;
                 return false;
             }
@@ -282,7 +284,7 @@ namespace Macro_Inserter
                         currentFloorAfter = fallbackAfterFloor;
                         PulseMacroKeyViewer(__instance, entry, keyCount);
                         RecordDirectKeyTimesSummary(log, keyCount, currentFloorBefore, fallbackAfterFloor, asyncInputActive);
-                        LogLagSpikeIfNeeded(log, "plainSingleDirectHitFallback", prefixStartRealtime, prefixStartMemory, keyCount, keyCount, dueCount, currentFloorBefore, fallbackAfterFloor, entry.FirstSeqId, entry.LastSeqId, asyncInputActive);
+                        LogDirectKeyTimesSpikeIfNeeded(__instance, log, "plainSingleDirectHitFallback", prefixStartRealtime, prefixStartMemory, keyCount, keyCount, dueCount, currentFloorBefore, fallbackAfterFloor, entry.FirstSeqId, entry.LastSeqId, entry.FirstTargetTimeSeconds, clockSeconds, asyncInputActive);
                         __result = true;
                         return false;
                     }
@@ -296,7 +298,7 @@ namespace Macro_Inserter
             currentFloorAfter = currentFloorBefore;
             LogNormal(log,
                 $"directKeyTimes queued; waiting for floor confirmation. keyCount={keyCount} seqID={entry.FirstSeqId}-{entry.LastSeqId} targetTime={entry.FirstTargetTimeSeconds:F6}s spanMs={entry.SpanMs:F3} rawEntryCount={entry.RawEntryCount} containsMidspin={entry.ContainsMidspin} isNearMidspin={entry.IsNearMidspin} plainSingle={plainSingle} stuckPlainSingleAttempts={stuckPlainSingleAttemptCount} currentFloorBefore={currentFloorBefore} currentFloorAfter={afterFloor} expectedAfter={entry.LastSeqId} dueCount={dueCount} asyncInputActive={asyncInputActive}");
-            LogLagSpikeIfNeeded(log, "queuedNoAdvance", prefixStartRealtime, prefixStartMemory, keyCount, keyCount, dueCount, currentFloorBefore, afterFloor, entry.FirstSeqId, entry.LastSeqId, asyncInputActive);
+            LogDirectKeyTimesSpikeIfNeeded(__instance, log, "queuedNoAdvance", prefixStartRealtime, prefixStartMemory, keyCount, keyCount, dueCount, currentFloorBefore, afterFloor, entry.FirstSeqId, entry.LastSeqId, entry.FirstTargetTimeSeconds, clockSeconds, asyncInputActive);
             __result = false;
             return false;
         }
@@ -468,7 +470,8 @@ namespace Macro_Inserter
             macroKeyViewerPulsesSinceSummary = 0;
             lastDirectKeyTimesSummaryRealtime = now;
         }
-        private static void LogLagSpikeIfNeeded(
+        private static void LogDirectKeyTimesSpikeIfNeeded(
+            InternalMacroService service,
             Action<string>? log,
             string operation,
             double startRealtime,
@@ -480,25 +483,103 @@ namespace Macro_Inserter
             int afterFloor,
             int firstSeqId,
             int lastSeqId,
+            double targetTimeSeconds,
+            double clockSeconds,
             bool asyncInputActive)
         {
             NaturalFingeringOptions.Load();
-            if (!NaturalFingeringOptions.EnableLagSpikeLog ||
-                !NaturalFingeringOptions.ShouldLog(PseudoChordUiLogMode.Minimal))
+            if (!NaturalFingeringOptions.ShouldLog(PseudoChordUiLogMode.Minimal))
             {
                 return;
             }
 
-            double elapsedMs = (Time.realtimeSinceStartupAsDouble - startRealtime) * 1000.0;
-            if (elapsedMs < NaturalFingeringOptions.LagSpikeLogMs)
+            double now = Time.realtimeSinceStartupAsDouble;
+            double processingMs = (now - startRealtime) * 1000.0;
+            double lateMs = Math.Max(0.0, (clockSeconds - targetTimeSeconds) * 1000.0);
+            bool processingSpike = NaturalFingeringOptions.EnableLagSpikeLog &&
+                                   processingMs >= Math.Max(0.1, NaturalFingeringOptions.LagSpikeLogMs);
+            bool lateSpike = NaturalFingeringOptions.EnableLateSpikeLog &&
+                             lateMs >= Math.Max(0.1, NaturalFingeringOptions.LateSpikeLogMs);
+            if (!processingSpike && !lateSpike)
             {
                 return;
             }
+
+            double minIntervalSeconds = Math.Max(0.0, NaturalFingeringOptions.SpikeLogMinIntervalMs) / 1000.0;
+            if (minIntervalSeconds > 0.0 && now - lastDirectKeyTimesSpikeLogRealtime < minIntervalSeconds)
+            {
+                directKeyTimesSpikeLogSuppressed++;
+                return;
+            }
+
+            int suppressed = directKeyTimesSpikeLogSuppressed;
+            directKeyTimesSpikeLogSuppressed = 0;
+            lastDirectKeyTimesSpikeLogRealtime = now;
 
             long memoryDeltaBytes = Profiler.GetTotalAllocatedMemoryLong() - startMemoryBytes;
+            string reason = processingSpike && lateSpike
+                ? "late+processing"
+                : lateSpike
+                    ? "late"
+                    : "processing";
+
             LogMinimal(
                 log,
-                $"directKeyTimes lag spike v42. op={operation} elapsedMs={elapsedMs:F3} thresholdMs={NaturalFingeringOptions.LagSpikeLogMs:F3} entryKeys={entryKeyCount} processedKeys={processedKeyCount} dueCount={dueCount} floor={beforeFloor}->{afterFloor} seqID={firstSeqId}-{lastSeqId} asyncInputActive={asyncInputActive} macroKeyViewerPulsesWindow={macroKeyViewerPulsesSinceSummary} memDeltaKB={memoryDeltaBytes / 1024.0:F1}");
+                $"directKeyTimes spike v43. reason={reason} op={operation} lateMs={lateMs:F3} lateThresholdMs={NaturalFingeringOptions.LateSpikeLogMs:F3} processingMs={processingMs:F3} processingThresholdMs={NaturalFingeringOptions.LagSpikeLogMs:F3} clock={clockSeconds:F6}s target={targetTimeSeconds:F6}s entryKeys={entryKeyCount} processedKeys={processedKeyCount} dueCount={dueCount} floor={beforeFloor}->{afterFloor} seqID={firstSeqId}-{lastSeqId} asyncInputActive={asyncInputActive} macroKeyViewerPulsesWindow={macroKeyViewerPulsesSinceSummary} memDeltaKB={memoryDeltaBytes / 1024.0:F1} suppressedSinceLast={suppressed}");
+
+            if (NaturalFingeringOptions.ShouldLog(PseudoChordUiLogMode.Normal))
+            {
+                string context = BuildInputPlanContext(service, clockSeconds);
+                LogNormal(log, $"directKeyTimes spike context. {context}");
+            }
+
+            if (NaturalFingeringOptions.ShouldLog(PseudoChordUiLogMode.Verbose))
+            {
+                string current = BuildCurrentEntryDebug(firstSeqId, targetTimeSeconds, clockSeconds, entryKeyCount, processedKeyCount, dueCount);
+                LogVerbose(log, $"directKeyTimes spike current. {current}");
+            }
+        }
+
+        private static string BuildCurrentEntryDebug(
+            int firstSeqId,
+            double targetTimeSeconds,
+            double clockSeconds,
+            int entryKeyCount,
+            int processedKeyCount,
+            int dueCount)
+        {
+            double lateMs = Math.Max(0.0, (clockSeconds - targetTimeSeconds) * 1000.0);
+            return $"seqID={firstSeqId} target={targetTimeSeconds:F6}s clock={clockSeconds:F6}s lateMs={lateMs:F3} entryKeys={entryKeyCount} processedKeys={processedKeyCount} dueCount={dueCount}";
+        }
+
+        private static string BuildInputPlanContext(InternalMacroService service, double clockSeconds)
+        {
+            if (InputPlanField?.GetValue(service) is not IReadOnlyList<InputPlanEntry> inputPlan || inputPlan.Count == 0)
+            {
+                return "inputPlan=<unavailable>";
+            }
+
+            int nextIndex = NextIndexField?.GetValue(service) is int readNextIndex ? readNextIndex : -1;
+            if (nextIndex < 0)
+            {
+                return $"inputPlanCount={inputPlan.Count} nextIndex=<unavailable>";
+            }
+
+            int start = Math.Max(0, nextIndex - 2);
+            int end = Math.Min(inputPlan.Count - 1, nextIndex + 3);
+            List<string> parts = new List<string>();
+            for (int i = start; i <= end; i++)
+            {
+                InputPlanEntry entry = inputPlan[i];
+                double lateMs = Math.Max(0.0, (clockSeconds - entry.FirstTargetTimeSeconds) * 1000.0);
+                string assigned = entry.AssignedKeyNames.Count == 0
+                    ? "-"
+                    : string.Join(",", entry.AssignedKeyNames.Take(8).ToArray()) + (entry.AssignedKeyNames.Count > 8 ? ",..." : string.Empty);
+                parts.Add(
+                    $"#{i}{(i == nextIndex ? "*" : string.Empty)}:seq={entry.FirstSeqId}-{entry.LastSeqId},target={entry.FirstTargetTimeSeconds:F6},lateMs={lateMs:F2},keys={entry.EmittedHitCount},raw={entry.RawEntryCount},spanMs={entry.SpanMs:F2},assigned={assigned}");
+            }
+
+            return $"inputPlanCount={inputPlan.Count} nextIndex={nextIndex} window=[{string.Join(" | ", parts.ToArray())}]";
         }
 
         private static void LogMinimal(Action<string>? log, string message)

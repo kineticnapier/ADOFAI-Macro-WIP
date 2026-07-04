@@ -2,7 +2,8 @@ namespace Macro_Inserter;
 
 public enum LoggingMode
 {
-    Minimal,
-    Normal,
-    Verbose
+    None = 0,
+    Minimal = 1,
+    Normal = 2,
+    Verbose = 3
 }
