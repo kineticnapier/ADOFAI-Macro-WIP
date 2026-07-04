@@ -7,16 +7,19 @@ namespace Macro_Inserter;
 internal static class FingeringPlanner
 {
     private const int BankSize = 4;
-    private const double InitialMaxVisualBpm = 1000.0;
+    private const double MaxFoldedVisualBpm = 1000.0;
+    private const double MaxRaisedVisualBpm = 500.0;
     private const double MaxExpandedVisualBpm = 8000.0;
     private const double BpmChangeEpsilon = 0.0001;
 
     private static readonly string[] FallbackKeys =
     {
         "Tab", "1", "2", "E",
-        "LShift", "LCtrl", "C", "無変換",
         "P", "^", "\\", "Enter",
-        "K", ".", "RShift", "RCtrl"
+        "LShift", "LCtrl", "C", "NC",
+        "K", ".", "RCtrl", "RShift",
+        "F1", "F2", "F3", "F4",
+        "F5", "F6", "F7", "F8"
     };
 
     public static IReadOnlyList<InputPlanEntry> ApplyBeatBankFingering(
@@ -92,7 +95,7 @@ internal static class FingeringPlanner
         }
 
         log(
-            $"Natural fingering v30 beat-bank plan built. entries={assigned.Length} keys={keys.Length} banks={banks.Count} bankSize={BankSize} sections={sectionCount} expandedSections={expandedSectionCount} maxBucketInputs={maxBucketInputs} bpmMapEntries={bpmBySeqId.Count}");
+            $"Natural fingering v35 beat-bank plan built. entries={assigned.Length} keys={keys.Length} banks={banks.Count} bankSize={BankSize} sections={sectionCount} expandedSections={expandedSectionCount} maxBucketInputs={maxBucketInputs} bpmMapEntries={bpmBySeqId.Count}");
         return assigned;
     }
 
@@ -176,15 +179,64 @@ internal static class FingeringPlanner
 
     private static string[] BuildBucketKeyOrder(long bucketIndex, IReadOnlyList<IReadOnlyList<string>> banks)
     {
+        // v35: do not rotate through every body part on successive beats.
+        // Each beat bucket starts from an upper bank again; lower/foot banks are
+        // only appended when that bucket contains more inputs than the upper bank
+        // can cover. For balance, alternate the leading side per beat bucket:
+        //   even bucket: left upper -> left lower -> right upper -> right lower -> left foot -> right foot
+        //   odd  bucket: right upper -> right lower -> left upper -> left lower -> right foot -> left foot
+        // With <=4 inputs this means every beat uses only an upper bank, instead
+        // of walking down through lower/foot banks over time.
         int bankCount = banks.Count;
-        int primary = (int)(PositiveModulo(bucketIndex, bankCount));
-        List<string> keys = new List<string>();
-        for (int offset = 0; offset < bankCount; offset++)
+        if (bankCount <= 0)
         {
-            IReadOnlyList<string> bank = banks[(primary + offset) % bankCount];
-            for (int i = 0; i < bank.Count; i++)
+            return FallbackKeys;
+        }
+
+        bool startRight = PositiveModulo(bucketIndex, 2) == 1;
+
+        if (bankCount >= 6)
+        {
+            int[] order = startRight
+                ? new[] { 2, 3, 0, 1, 5, 4 }
+                : new[] { 0, 1, 2, 3, 4, 5 };
+            return FlattenBanks(banks, order);
+        }
+
+        if (bankCount >= 4)
+        {
+            int[] order = startRight
+                ? new[] { 2, 3, 0, 1 }
+                : new[] { 0, 1, 2, 3 };
+            return FlattenBanks(banks, order);
+        }
+
+        if (bankCount >= 2)
+        {
+            int[] order = startRight
+                ? new[] { 1, 0 }
+                : new[] { 0, 1 };
+            return FlattenBanks(banks, order);
+        }
+
+        return FlattenBanks(banks, new[] { 0 });
+    }
+
+    private static string[] FlattenBanks(IReadOnlyList<IReadOnlyList<string>> banks, IReadOnlyList<int> order)
+    {
+        List<string> keys = new List<string>();
+        for (int i = 0; i < order.Count; i++)
+        {
+            int bankIndex = order[i];
+            if (bankIndex < 0 || bankIndex >= banks.Count)
             {
-                keys.Add(bank[i]);
+                continue;
+            }
+
+            IReadOnlyList<string> bank = banks[bankIndex];
+            for (int j = 0; j < bank.Count; j++)
+            {
+                keys.Add(bank[j]);
             }
         }
 
@@ -193,17 +245,64 @@ internal static class FingeringPlanner
 
     private static IReadOnlyList<IReadOnlyList<string>> BuildBanks(IReadOnlyList<string> keys)
     {
+        // MacroKeyViewer is displayed row-major in 8 columns:
+        //   0..3   = left upper,  4..7   = right upper
+        //   8..11  = left lower,  12..15 = right lower
+        //   16..19 = left foot,   20..23 = right foot
+        // The natural fingering rotation should be logical body order, not row order:
+        // left upper -> left lower -> right upper -> right lower -> left foot -> right foot.
+        //
+        // Within each left-side bank, use the inside-to-outside order requested for the
+        // row-major display: Tab 1 2 E becomes E 2 1 Tab. Right-side banks keep their
+        // displayed order: P ^ \ Enter stays P ^ \ Enter. v33/v34/v35 starts each beat from
+        // an upper bank again and only appends lower/foot banks when one beat needs
+        // more than the upper bank can cover.
         List<IReadOnlyList<string>> banks = new List<IReadOnlyList<string>>();
+        if (keys.Count >= 16)
+        {
+            AddBankFromRange(keys, banks, 0, reverse: true);
+            AddBankFromRange(keys, banks, 8, reverse: true);
+            AddBankFromRange(keys, banks, 4, reverse: false);
+            AddBankFromRange(keys, banks, 12, reverse: false);
+            if (keys.Count >= 24)
+            {
+                AddBankFromRange(keys, banks, 16, reverse: true);
+                AddBankFromRange(keys, banks, 20, reverse: false);
+            }
+
+            for (int i = keys.Count >= 24 ? 24 : 16; i < keys.Count; i += BankSize)
+            {
+                AddBankFromRange(keys, banks, i, reverse: false);
+            }
+
+            return banks;
+        }
+
         for (int i = 0; i < keys.Count; i += BankSize)
         {
-            string[] bank = keys.Skip(i).Take(BankSize).ToArray();
-            if (bank.Length > 0)
-            {
-                banks.Add(bank);
-            }
+            AddBankFromRange(keys, banks, i, reverse: false);
         }
 
         return banks;
+    }
+
+    private static void AddBankFromRange(IReadOnlyList<string> keys, List<IReadOnlyList<string>> banks, int startIndex, bool reverse)
+    {
+        if (startIndex >= keys.Count)
+        {
+            return;
+        }
+
+        string[] bank = keys.Skip(startIndex).Take(BankSize).ToArray();
+        if (reverse)
+        {
+            Array.Reverse(bank);
+        }
+
+        if (bank.Length > 0)
+        {
+            banks.Add(bank);
+        }
     }
 
     private static double ResolveBpm(InputPlanEntry entry, IReadOnlyDictionary<int, double> bpmBySeqId, double fallbackBpm)
@@ -224,9 +323,21 @@ internal static class FingeringPlanner
     private static double NormalizeVisualBpm(double bpm)
     {
         double result = bpm > 0.0 ? bpm : 120.0;
-        while (result > InitialMaxVisualBpm)
+
+        // Downward folding is still allowed until the visual BPM is <=1000.
+        // Example: 2500 -> 1250 -> 625.
+        while (result > MaxFoldedVisualBpm)
         {
             result *= 0.5;
+        }
+
+        // Upward refinement is intentionally more conservative than v34.
+        // Raise only while the doubled value is <=500, so 100 -> 200 -> 400,
+        // but 300 stays 300. This keeps medium BPM sections from becoming too
+        // twitchy while still giving very low BPM sections a useful visual grid.
+        while (result * 2.0 <= MaxRaisedVisualBpm)
+        {
+            result *= 2.0;
         }
 
         return Math.Max(1.0, result);

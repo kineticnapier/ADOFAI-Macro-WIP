@@ -17,7 +17,7 @@ namespace Macro_Inserter
 {
     internal static class PseudoChordInputPlanFix
     {
-        private static readonly Harmony Harmony = new Harmony("Macro-Inserter.PseudoChordInputPlanFix.v30");
+        private static readonly Harmony Harmony = new Harmony("Macro-Inserter.PseudoChordInputPlanFix.v35");
         private static readonly FieldInfo? SettingsField = AccessTools.Field(typeof(InternalMacroService), "settings");
         private static readonly FieldInfo? LogField = AccessTools.Field(typeof(InternalMacroService), "log");
         private static readonly FieldInfo? InputPlanField = AccessTools.Field(typeof(InternalMacroService), "inputPlan");
@@ -32,6 +32,7 @@ namespace Macro_Inserter
         private static int directKeyTimesKeysSinceSummary;
         private static int directKeyTimesFloorAdvanceSinceSummary;
         private static int macroKeyViewerPulsesSinceSummary;
+        private static long macroKeyViewerFallbackCounter;
         private static double lastDirectKeyTimesSummaryRealtime;
         private static int stuckPlainSingleSeqId = -1;
         private static int stuckPlainSingleAttemptCount;
@@ -95,11 +96,11 @@ namespace Macro_Inserter
                 }
 
                 patched = buildPatched && firePatched;
-                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v30 installed by {reason}. buildPatched={buildPatched} firePatched={firePatched}");
+                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v35 installed by {reason}. buildPatched={buildPatched} firePatched={firePatched}");
             }
             catch (Exception ex)
             {
-                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v30 install failed: {ex}");
+                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v35 install failed: {ex}");
             }
         }
 
@@ -119,7 +120,7 @@ namespace Macro_Inserter
             {
                 // The runtime input-pipeline plan is executed through the original
                 // DirectHit branch because that is the only branch that calls
-                // TryFirePseudoChordGroup(). The v11/v12/v13/v14/v15/v17/v18/v20/v21/v23/v24/v25/v26/v27/v28/v29/v30 prefix on that method
+                // TryFirePseudoChordGroup(). The v11/v12/v13/v14/v15/v17/v18/v20/v21/v23/v24/v25/v26/v27/v28/v29/v30/v31/v33/v34/v35 prefix on that method
                 // intercepts the call and schedules InputPatchState instead of
                 // calling scrController.Hit() directly.
                 //
@@ -197,7 +198,7 @@ namespace Macro_Inserter
             // direct-hit finish after burst drain, but that can corrupt sections
             // that already worked through the normal input queue. v28 keeps the
             // dense KV throttling, removes the direct-hit finish, and only enables
-            // burst mode for genuinely dense key bursts. v29 disables burst execution again for stability comparisons and keeps only the safer KV throttling. v30 changes only MacroKeyViewer fingering: beat-bank key assignment, while gameplay input stays directKeyTimes.
+            // burst mode for genuinely dense key bursts. v29 disables burst execution again for stability comparisons and keeps only the safer KV throttling. v30 changes only MacroKeyViewer fingering: beat-bank key assignment, while gameplay input stays directKeyTimes. v31 fixes the fallback MacroKeyViewer counter compile error and maps row-major 24-key layouts to logical hand/foot banks. v33 reverses left-side bank order so left banks play inside-to-outside while right banks keep display order. v34 uses the finest visual beat grid that stays at or below 1000 BPM. v35 keeps downward folding at <=1000 but only raises low BPM sections up to <=500.
             bool plainSingle =
                 keyCount == 1 &&
                 entry.RawEntryCount == 1 &&
@@ -375,7 +376,7 @@ namespace Macro_Inserter
                 return;
             }
 
-            // v30: the game input path still only queues keyTimes. Natural fingering is
+            // v35: the game input path still only queues keyTimes. Natural fingering is
             // a MacroKeyViewer layer: pulse the beat-bank assigned key names instead of
             // the old round-robin counter. Keep v29's UI load cap so dense sections do
             // not destabilize playback.
@@ -402,8 +403,8 @@ namespace Macro_Inserter
                 }
                 else
                 {
-                    int keyIndex = (int)(macroKeyViewerHitCounter % configuredKeys.Count);
-                    macroKeyViewerHitCounter++;
+                    int keyIndex = (int)(macroKeyViewerFallbackCounter % configuredKeys.Count);
+                    macroKeyViewerFallbackCounter++;
                     keyName = configuredKeys[keyIndex];
                 }
 
