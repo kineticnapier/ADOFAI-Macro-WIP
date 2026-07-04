@@ -53,12 +53,12 @@ internal static class ChartFileInputPlanBuilder
         try
         {
             IReadOnlyDictionary<int, double> bpmBySeqId = AdofaiChartFileParser.ParseBpmBySeqId(chartPath);
-            if (NaturalFingeringOptions.ShouldLog(PseudoChordUiLogMode.Minimal)) log($"Natural fingering v37: loaded chart BPM map. path={chartPath} entries={bpmBySeqId.Count}");
+            if (NaturalFingeringOptions.ShouldLog(PseudoChordUiLogMode.Minimal)) log($"Natural fingering v40: loaded chart BPM map. path={chartPath} entries={bpmBySeqId.Count}");
             return bpmBySeqId;
         }
         catch (Exception ex)
         {
-            if (NaturalFingeringOptions.ShouldLog(PseudoChordUiLogMode.Normal)) log($"Natural fingering v37: failed to load chart BPM map; falling back to 120 BPM buckets. error={ex.GetType().Name}: {ex.Message} path={chartPath}");
+            if (NaturalFingeringOptions.ShouldLog(PseudoChordUiLogMode.Normal)) log($"Natural fingering v40: failed to load chart BPM map; falling back to 120 BPM buckets. error={ex.GetType().Name}: {ex.Message} path={chartPath}");
             return new Dictionary<int, double>();
         }
     }

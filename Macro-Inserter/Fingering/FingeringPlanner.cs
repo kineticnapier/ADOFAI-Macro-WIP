@@ -100,7 +100,7 @@ internal static class FingeringPlanner
         if (NaturalFingeringOptions.ShouldLog(PseudoChordUiLogMode.Minimal))
         {
             log(
-                $"Natural fingering v37 beat-bank plan built. entries={assigned.Length} keys={keys.Length} banks={banks.Count} bankSize={BankSize} sections={sectionCount} expandedSections={expandedSectionCount} maxBucketInputs={maxBucketInputs} lowerBankBuckets={debug.LowerBankBucketCount} oppositeSideBuckets={debug.OppositeSideBucketCount} footBuckets={debug.FootBucketCount} wrappedBuckets={debug.WrappedBucketCount} debugEventsLogged={debug.LoggedCount} debugEventsOmitted={debug.OmittedCount} bpmMapEntries={bpmBySeqId.Count} foldDownMaxBpm={NaturalFingeringOptions.FoldDownMaxBpm:F3} raiseUpMaxBpm={NaturalFingeringOptions.RaiseUpMaxBpm:F3} logMode={NaturalFingeringOptions.LogMode}");
+                $"Natural fingering v40 beat-bank plan built. entries={assigned.Length} keys={keys.Length} banks={banks.Count} bankSize={BankSize} sections={sectionCount} expandedSections={expandedSectionCount} maxBucketInputs={maxBucketInputs} lowerBankBuckets={debug.LowerBankBucketCount} oppositeSideBuckets={debug.OppositeSideBucketCount} footBuckets={debug.FootBucketCount} wrappedBuckets={debug.WrappedBucketCount} debugEventsLogged={debug.LoggedCount} debugEventsOmitted={debug.OmittedCount} bpmMapEntries={bpmBySeqId.Count} foldDownMaxBpm={NaturalFingeringOptions.FoldDownMaxBpm:F3} raiseUpMaxBpm={NaturalFingeringOptions.RaiseUpMaxBpm:F3} logMode={NaturalFingeringOptions.LogMode}");
         }
 
         if (NaturalFingeringOptions.ShouldLog(PseudoChordUiLogMode.Normal))
@@ -556,7 +556,7 @@ internal static class FingeringPlanner
             int totalKeyCount)
         {
             Add(
-                $"Natural fingering v37 expand. section={sectionIndex} seqID={firstSeqId}-{lastSeqId} rawBpm={rawBpm:F3} visualBpm={beforeVisualBpm:F3} expandedVisualBpm={afterVisualBpm:F3} beatMs={beforeBeatMs:F3}->{afterBeatMs:F3} maxBucketInputs={maxBucketInputs} availableKeys={totalKeyCount}");
+                $"Natural fingering v40 expand. section={sectionIndex} seqID={firstSeqId}-{lastSeqId} rawBpm={rawBpm:F3} visualBpm={beforeVisualBpm:F3} expandedVisualBpm={afterVisualBpm:F3} beatMs={beforeBeatMs:F3}->{afterBeatMs:F3} maxBucketInputs={maxBucketInputs} availableKeys={totalKeyCount}");
         }
 
         public void RecordBucket(
@@ -596,7 +596,7 @@ internal static class FingeringPlanner
             }
 
             Add(
-                $"Natural fingering v37 overflow. section={sectionIndex} bucket={bucketIndex} time={bucketTimeSeconds:F6}s side={side} rawBpm={rawBpm:F3} visualBpm={visualBpm:F3} beatMs={beatMs:F3} inputs={inputCount} assigned={assignedPreview} reason={reason}");
+                $"Natural fingering v40 overflow. section={sectionIndex} bucket={bucketIndex} time={bucketTimeSeconds:F6}s side={side} rawBpm={rawBpm:F3} visualBpm={visualBpm:F3} beatMs={beatMs:F3} inputs={inputCount} assigned={assignedPreview} reason={reason}");
         }
 
         public void Flush(Action<string> log)
@@ -608,7 +608,7 @@ internal static class FingeringPlanner
 
             if (OmittedCount > 0)
             {
-                log($"Natural fingering v37 debug omitted. omittedEvents={OmittedCount} maxLoggedEvents={maxEvents}");
+                log($"Natural fingering v40 debug omitted. omittedEvents={OmittedCount} maxLoggedEvents={maxEvents}");
             }
         }
 

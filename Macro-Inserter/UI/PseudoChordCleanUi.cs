@@ -36,35 +36,31 @@ internal static class PseudoChordCleanUi
         return NaturalFingeringOptions.LogMode != PseudoChordUiLogMode.None;
     }
 
-    public static bool OnGuiPrefix(UnityModManager.ModEntry entry)
+    public static void LoadPostfix(UnityModManager.ModEntry entry)
     {
-        NaturalFingeringOptions.Load();
-        if (!NaturalFingeringOptions.CleanUiEnabled)
-        {
-            return true;
-        }
-
         try
         {
-            object? settings = ReadStaticField("settings");
-            object? service = ReadStaticField("service");
-            if (settings == null)
+            if (entry == null)
             {
-                return true;
+                return;
             }
 
-            DrawCleanUi(settings, service);
-            return false;
+            Debug.Log("[Macro-Inserter] PseudoChord clean UI v40 is disabled; leaving original UMM OnGUI delegate untouched.");
         }
         catch (Exception ex)
         {
-            GUILayout.BeginVertical("box");
-            GUILayout.Label($"PseudoChord clean UI failed; falling back next frame. {ex.GetType().Name}: {ex.Message}");
-            NaturalFingeringOptions.CleanUiEnabled = false;
-            NaturalFingeringOptions.Save();
-            GUILayout.EndVertical();
-            return false;
+            Debug.Log($"[Macro-Inserter] PseudoChord clean UI v40 delegate install failed: {ex.GetType().Name}: {ex.Message}");
         }
+    }
+
+    public static void OnGuiDelegate(UnityModManager.ModEntry entry)
+    {
+        OnGuiPrefix(entry);
+    }
+
+    public static bool OnGuiPrefix(UnityModManager.ModEntry entry)
+    {
+        return true;
     }
 
     private static void DrawCleanUi(object settings, object? service)
@@ -89,10 +85,24 @@ internal static class PseudoChordCleanUi
 
         ForceRuntimeSafeSettings(settings);
 
-        DrawNaturalFingeringSettings();
-        DrawLagSpikeSettings();
-        DrawMacroKeyViewerSettings(settings, service);
-        DrawServiceStats(service);
+        bool cleanUiEnabled = GUILayout.Toggle(NaturalFingeringOptions.CleanUiEnabled, "Show clean UI advanced controls");
+        if (cleanUiEnabled != NaturalFingeringOptions.CleanUiEnabled)
+        {
+            NaturalFingeringOptions.CleanUiEnabled = cleanUiEnabled;
+            NaturalFingeringOptions.Save();
+        }
+
+        if (NaturalFingeringOptions.CleanUiEnabled)
+        {
+            DrawNaturalFingeringSettings();
+            DrawLagSpikeSettings();
+            DrawMacroKeyViewerSettings(settings, service);
+            DrawServiceStats(service);
+        }
+        else
+        {
+            GUILayout.Label("Advanced clean-UI controls are hidden. Enable the toggle above to edit fingering/KV/log diagnostics.");
+        }
 
         GUILayout.BeginHorizontal();
         if (GUILayout.Button("Stop scheduler", GUILayout.Width(160f)))
@@ -106,13 +116,6 @@ internal static class PseudoChordCleanUi
         }
 
         GUILayout.EndHorizontal();
-
-        bool cleanUiEnabled = GUILayout.Toggle(NaturalFingeringOptions.CleanUiEnabled, "Clean UI enabled / hide unused experimental controls");
-        if (cleanUiEnabled != NaturalFingeringOptions.CleanUiEnabled)
-        {
-            NaturalFingeringOptions.CleanUiEnabled = cleanUiEnabled;
-            NaturalFingeringOptions.Save();
-        }
 
         GUILayout.EndVertical();
     }

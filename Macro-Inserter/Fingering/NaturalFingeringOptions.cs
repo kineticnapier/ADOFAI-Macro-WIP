@@ -13,7 +13,7 @@ internal enum PseudoChordUiLogMode
 
 internal static class NaturalFingeringOptions
 {
-    private const string Prefix = "MacroInserter.PseudoChord.v37.";
+    private const string Prefix = "MacroInserter.PseudoChord.v40.";
 
     public static bool CleanUiEnabled { get; set; } = true;
     public static double FoldDownMaxBpm { get; set; } = 1000.0;

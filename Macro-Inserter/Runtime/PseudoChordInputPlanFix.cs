@@ -18,7 +18,7 @@ namespace Macro_Inserter
 {
     internal static class PseudoChordInputPlanFix
     {
-        private static readonly Harmony Harmony = new Harmony("Macro-Inserter.PseudoChordInputPlanFix.v37");
+        private static readonly Harmony Harmony = new Harmony("Macro-Inserter.PseudoChordInputPlanFix.v42");
         private static readonly FieldInfo? SettingsField = AccessTools.Field(typeof(InternalMacroService), "settings");
         private static readonly FieldInfo? LogField = AccessTools.Field(typeof(InternalMacroService), "log");
         private static readonly FieldInfo? InputPlanField = AccessTools.Field(typeof(InternalMacroService), "inputPlan");
@@ -75,20 +75,15 @@ namespace Macro_Inserter
                 MethodInfo? buildPrefix = AccessTools.Method(typeof(PseudoChordInputPlanFix), nameof(BuildInputPlanPrefix));
 
                 MethodInfo? firePrefix = AccessTools.Method(typeof(PseudoChordInputPlanFix), nameof(TryFirePseudoChordGroupPrefix));
-                MethodInfo? onGuiOriginal = AccessTools.Method(typeof(Main), "OnGUI");
-                MethodInfo? onGuiPrefix = AccessTools.Method(typeof(PseudoChordCleanUi), nameof(PseudoChordCleanUi.OnGuiPrefix));
-                MethodInfo? logOriginal = AccessTools.Method(typeof(Main), "Log");
-                MethodInfo? logPrefix = AccessTools.Method(typeof(PseudoChordCleanUi), nameof(PseudoChordCleanUi.MainLogPrefix));
                 IReadOnlyList<MethodInfo> fireOriginals = AccessTools.GetDeclaredMethods(typeof(InternalMacroService))
                     .Where(method => method.Name == "TryFirePseudoChordGroup")
                     .ToArray();
 
                 NaturalFingeringOptions.Load();
+                MacroKeyViewerRainOverlay.EnsureInstalled();
 
                 bool buildPatched = false;
                 bool firePatched = false;
-                bool uiPatched = false;
-                bool logPatched = false;
                 if (buildOriginal != null && buildPrefix != null)
                 {
                     Harmony.Patch(buildOriginal, prefix: new HarmonyMethod(buildPrefix));
@@ -104,24 +99,12 @@ namespace Macro_Inserter
                     }
                 }
 
-                if (onGuiOriginal != null && onGuiPrefix != null)
-                {
-                    Harmony.Patch(onGuiOriginal, prefix: new HarmonyMethod(onGuiPrefix));
-                    uiPatched = true;
-                }
-
-                if (logOriginal != null && logPrefix != null)
-                {
-                    Harmony.Patch(logOriginal, prefix: new HarmonyMethod(logPrefix));
-                    logPatched = true;
-                }
-
                 patched = buildPatched && firePatched;
-                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v37 installed by {reason}. buildPatched={buildPatched} firePatched={firePatched} uiPatched={uiPatched} logPatched={logPatched}");
+                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v42 installed by {reason}. buildPatched={buildPatched} firePatched={firePatched} rainOverlay=True uiPatchDisabled=True loadPatchDisabled=True logPatchDisabled=True");
             }
             catch (Exception ex)
             {
-                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v37 install failed: {ex}");
+                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v42 install failed: {ex}");
             }
         }
 
@@ -221,7 +204,7 @@ namespace Macro_Inserter
             // direct-hit finish after burst drain, but that can corrupt sections
             // that already worked through the normal input queue. v28 keeps the
             // dense KV throttling, removes the direct-hit finish, and only enables
-            // burst mode for genuinely dense key bursts. v29 disables burst execution again for stability comparisons and keeps only the safer KV throttling. v30 changes only MacroKeyViewer fingering: beat-bank key assignment, while gameplay input stays directKeyTimes. v31 fixes the fallback MacroKeyViewer counter compile error and maps row-major 24-key layouts to logical hand/foot banks. v33 reverses left-side bank order so left banks play inside-to-outside while right banks keep display order. v34 uses the finest visual beat grid that stays at or below 1000 BPM. v35 keeps downward folding at <=1000 but only raises low BPM sections up to <=500. v36 adds capped natural-fingering debug logs for overflow/expansion buckets. v37 adds adjustable visual BPM thresholds, a clean UI/log mode patch, lag-spike diagnostics, and a MacroKeyViewer rain view.
+            // burst mode for genuinely dense key bursts. v29 disables burst execution again for stability comparisons and keeps only the safer KV throttling. v30 changes only MacroKeyViewer fingering: beat-bank key assignment, while gameplay input stays directKeyTimes. v31 fixes the fallback MacroKeyViewer counter compile error and maps row-major 24-key layouts to logical hand/foot banks. v33 reverses left-side bank order so left banks play inside-to-outside while right banks keep display order. v34 uses the finest visual beat grid that stays at or below 1000 BPM. v35 keeps downward folding at <=1000 but only raises low BPM sections up to <=500. v36 adds capped natural-fingering debug logs for overflow/expansion buckets. v37 adds adjustable visual BPM thresholds, a clean UI/log mode patch, lag-spike diagnostics, and a MacroKeyViewer rain view. v40 also replaces the UnityModManager OnGUI delegate from Main.Load postfix because Harmony-patching Main.OnGUI alone can leave UMM using the original delegate.
             bool plainSingle =
                 keyCount == 1 &&
                 entry.RawEntryCount == 1 &&
@@ -515,7 +498,7 @@ namespace Macro_Inserter
             long memoryDeltaBytes = Profiler.GetTotalAllocatedMemoryLong() - startMemoryBytes;
             LogMinimal(
                 log,
-                $"directKeyTimes lag spike v37. op={operation} elapsedMs={elapsedMs:F3} thresholdMs={NaturalFingeringOptions.LagSpikeLogMs:F3} entryKeys={entryKeyCount} processedKeys={processedKeyCount} dueCount={dueCount} floor={beforeFloor}->{afterFloor} seqID={firstSeqId}-{lastSeqId} asyncInputActive={asyncInputActive} macroKeyViewerPulsesWindow={macroKeyViewerPulsesSinceSummary} memDeltaKB={memoryDeltaBytes / 1024.0:F1}");
+                $"directKeyTimes lag spike v42. op={operation} elapsedMs={elapsedMs:F3} thresholdMs={NaturalFingeringOptions.LagSpikeLogMs:F3} entryKeys={entryKeyCount} processedKeys={processedKeyCount} dueCount={dueCount} floor={beforeFloor}->{afterFloor} seqID={firstSeqId}-{lastSeqId} asyncInputActive={asyncInputActive} macroKeyViewerPulsesWindow={macroKeyViewerPulsesSinceSummary} memDeltaKB={memoryDeltaBytes / 1024.0:F1}");
         }
 
         private static void LogMinimal(Action<string>? log, string message)
