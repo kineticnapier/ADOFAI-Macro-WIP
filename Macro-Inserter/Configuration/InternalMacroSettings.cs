@@ -38,6 +38,17 @@ public sealed class InternalMacroSettings : UnityModManager.ModSettings
     public string MacroKeyViewerIdleColor = "#202020DD";
     public string MacroKeyViewerTextColor = "#FFFFFFFF";
     public string MacroKeyViewerPanelColor = "#000000AA";
+    public bool EnableKeyViewerRain = true;
+    public float KeyViewerRainPulseMs = 70.0f;
+    public float KeyViewerRainSpeedPxPerSec = 260.0f;
+    public float KeyViewerRainFadeMs = 450.0f;
+    public float KeyViewerRainWidthScale = 0.72f;
+    public float KeyViewerRainMinHeightPx = 8.0f;
+    public float KeyViewerRainMaxHeightPx = 90.0f;
+    public float KeyViewerRainAlpha = 0.72f;
+    public string KeyViewerRainColor = "#66D9FFFF";
+    public int KeyViewerRainMaxSegments = 512;
+    public float KeyViewerRainYOffsetPx = 2.0f;
 
     public override void Save(UnityModManager.ModEntry modEntry)
     {

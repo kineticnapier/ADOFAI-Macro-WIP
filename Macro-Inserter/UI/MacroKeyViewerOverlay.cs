@@ -25,6 +25,7 @@ internal sealed class MacroKeyViewerOverlay : MonoBehaviour
         settings = macroSettings;
         getService = serviceAccessor;
         isModEnabled = modEnabledAccessor;
+        MacroKeyViewerRainOverlay.EnsureInstalled();
 
         GameObject gameObject = new("Macro-Inserter KeyViewer Overlay");
         DontDestroyOnLoad(gameObject);
@@ -117,10 +118,12 @@ internal sealed class MacroKeyViewerOverlay : MonoBehaviour
         GUIStyle pressedStyle = CreateSolidStyle(pressedColor, Mathf.RoundToInt(4f * scale), margin: Mathf.RoundToInt(3f * scale));
         GUIStyle idleStyle = CreateSolidStyle(idleColor, Mathf.RoundToInt(4f * scale), margin: Mathf.RoundToInt(3f * scale));
 
+        List<Rect> keyRects = new();
         DrawColoredRect(area, panelColor);
         GUILayout.BeginArea(area);
-        DrawKeyViewerContent(state, keys, columns, keyWidth, keyHeight, scale, pressedStyle, idleStyle, textColor, panelStyle);
+        DrawKeyViewerContent(state, keys, columns, keyWidth, keyHeight, scale, pressedStyle, idleStyle, textColor, panelStyle, area, keyRects);
         GUILayout.EndArea();
+        MacroKeyViewerRainOverlay.Draw(macroSettings, keys, keyRects);
     }
 
     private static float ResolveY(float configuredY, float height)
@@ -142,7 +145,9 @@ internal sealed class MacroKeyViewerOverlay : MonoBehaviour
         GUIStyle pressedStyle,
         GUIStyle idleStyle,
         Color textColor,
-        GUIStyle panelStyle)
+        GUIStyle panelStyle,
+        Rect screenArea,
+        List<Rect> keyScreenRects)
     {
         GUIStyle titleStyle = new(GUI.skin.label)
         {
@@ -172,7 +177,7 @@ internal sealed class MacroKeyViewerOverlay : MonoBehaviour
             GUILayout.BeginHorizontal();
             for (int column = 0; column < columns && index + column < keys.Count; column++)
             {
-                DrawMacroKey(keys[index + column], keyStyle, countStyle, keyWidth, keyHeight, pressedStyle, idleStyle);
+                DrawMacroKey(keys[index + column], keyStyle, countStyle, keyWidth, keyHeight, pressedStyle, idleStyle, screenArea, keyScreenRects);
             }
 
             GUILayout.EndHorizontal();
@@ -190,13 +195,25 @@ internal sealed class MacroKeyViewerOverlay : MonoBehaviour
         float width,
         float height,
         GUIStyle pressedStyle,
-        GUIStyle idleStyle)
+        GUIStyle idleStyle,
+        Rect screenArea,
+        List<Rect> keyScreenRects)
     {
         GUIStyle keyBoxStyle = key.Pressed ? pressedStyle : idleStyle;
-        GUILayout.BeginVertical(keyBoxStyle, GUILayout.Width(width), GUILayout.Height(height));
-        GUILayout.Label(key.Name, keyStyle, GUILayout.Width(width - 8f));
-        GUILayout.Label(key.Count.ToString(CultureInfo.InvariantCulture), countStyle, GUILayout.Width(width - 8f));
-        GUILayout.EndVertical();
+        Rect rect = GUILayoutUtility.GetRect(width, height, keyBoxStyle, GUILayout.Width(width), GUILayout.Height(height));
+        GUI.Box(rect, GUIContent.none, keyBoxStyle);
+
+        float paddingX = Mathf.Max(3.0f, 4.0f * Mathf.Clamp(width / 46.0f, 0.5f, 3.0f));
+        float topPadding = Mathf.Max(2.0f, 4.0f * Mathf.Clamp(height / 40.0f, 0.5f, 3.0f));
+        Rect nameRect = new(rect.x + paddingX, rect.y + topPadding, Mathf.Max(1.0f, rect.width - paddingX * 2.0f), rect.height * 0.45f);
+        Rect countRect = new(rect.x + paddingX, rect.y + rect.height * 0.52f, Mathf.Max(1.0f, rect.width - paddingX * 2.0f), rect.height * 0.40f);
+        GUI.Label(nameRect, key.Name, keyStyle);
+        GUI.Label(countRect, key.Count.ToString(CultureInfo.InvariantCulture), countStyle);
+
+        if (Event.current.type == EventType.Repaint && rect.width > 1.0f && rect.height > 1.0f)
+        {
+            keyScreenRects.Add(new Rect(screenArea.x + rect.x, screenArea.y + rect.y, rect.width, rect.height));
+        }
     }
 
     private static Color ParseColor(string configuredColor, string defaultColor)

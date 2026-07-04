@@ -29,6 +29,16 @@ public static class Main
     private static string macroKeyViewerIdleColorText = "#202020DD";
     private static string macroKeyViewerTextColorText = "#FFFFFFFF";
     private static string macroKeyViewerPanelColorText = "#000000AA";
+    private static string keyViewerRainPulseMsText = "70";
+    private static string keyViewerRainSpeedPxPerSecText = "260";
+    private static string keyViewerRainFadeMsText = "450";
+    private static string keyViewerRainWidthScaleText = "0.72";
+    private static string keyViewerRainMinHeightPxText = "8";
+    private static string keyViewerRainMaxHeightPxText = "90";
+    private static string keyViewerRainAlphaText = "0.72";
+    private static string keyViewerRainColorText = "#66D9FFFF";
+    private static string keyViewerRainMaxSegmentsText = "512";
+    private static string keyViewerRainYOffsetPxText = "2";
     private static bool enabled;
     private static float lastOnUpdateExceptionLogTime = -10.0f;
     private static string? lastOnUpdateExceptionSignature;
@@ -58,6 +68,17 @@ public static class Main
         settings.MacroKeyViewerIdleColor = macroKeyViewerIdleColorText;
         settings.MacroKeyViewerTextColor = macroKeyViewerTextColorText;
         settings.MacroKeyViewerPanelColor = macroKeyViewerPanelColorText;
+        keyViewerRainPulseMsText = settings.KeyViewerRainPulseMs.ToString(CultureInfo.InvariantCulture);
+        keyViewerRainSpeedPxPerSecText = settings.KeyViewerRainSpeedPxPerSec.ToString(CultureInfo.InvariantCulture);
+        keyViewerRainFadeMsText = settings.KeyViewerRainFadeMs.ToString(CultureInfo.InvariantCulture);
+        keyViewerRainWidthScaleText = settings.KeyViewerRainWidthScale.ToString(CultureInfo.InvariantCulture);
+        keyViewerRainMinHeightPxText = settings.KeyViewerRainMinHeightPx.ToString(CultureInfo.InvariantCulture);
+        keyViewerRainMaxHeightPxText = settings.KeyViewerRainMaxHeightPx.ToString(CultureInfo.InvariantCulture);
+        keyViewerRainAlphaText = settings.KeyViewerRainAlpha.ToString(CultureInfo.InvariantCulture);
+        keyViewerRainColorText = settings.KeyViewerRainColor ?? "#66D9FFFF";
+        settings.KeyViewerRainColor = keyViewerRainColorText;
+        keyViewerRainMaxSegmentsText = settings.KeyViewerRainMaxSegments.ToString(CultureInfo.InvariantCulture);
+        keyViewerRainYOffsetPxText = settings.KeyViewerRainYOffsetPx.ToString(CultureInfo.InvariantCulture);
         service = new InternalMacroService(settings, Log);
         macroKeyViewerOverlay = MacroKeyViewerOverlay.Create(settings, () => service, () => enabled);
 
@@ -269,6 +290,23 @@ public static class Main
         }
         GUILayout.EndHorizontal();
 
+        GUILayout.Label("Macro KeyViewer Rain");
+        settings.EnableKeyViewerRain = GUILayout.Toggle(settings.EnableKeyViewerRain, "EnableKeyViewerRain");
+        DrawFloatSetting("RainPulseMs", ref keyViewerRainPulseMsText, 5.0f, 300.0f, value => settings.KeyViewerRainPulseMs = value);
+        DrawFloatSetting("RainSpeedPxPerSec", ref keyViewerRainSpeedPxPerSecText, 20.0f, 2000.0f, value => settings.KeyViewerRainSpeedPxPerSec = value);
+        DrawFloatSetting("RainFadeMs", ref keyViewerRainFadeMsText, 0.0f, 3000.0f, value => settings.KeyViewerRainFadeMs = value);
+        DrawFloatSetting("RainWidthScale", ref keyViewerRainWidthScaleText, 0.1f, 1.5f, value => settings.KeyViewerRainWidthScale = value);
+        DrawFloatSetting("RainMinHeightPx", ref keyViewerRainMinHeightPxText, 1.0f, 80.0f, value =>
+        {
+            settings.KeyViewerRainMinHeightPx = value;
+            settings.KeyViewerRainMaxHeightPx = Mathf.Max(settings.KeyViewerRainMaxHeightPx, value);
+        });
+        DrawFloatSetting("RainMaxHeightPx", ref keyViewerRainMaxHeightPxText, settings.KeyViewerRainMinHeightPx, 300.0f, value => settings.KeyViewerRainMaxHeightPx = Mathf.Max(settings.KeyViewerRainMinHeightPx, value));
+        DrawFloatSetting("RainAlpha", ref keyViewerRainAlphaText, 0.0f, 1.0f, value => settings.KeyViewerRainAlpha = value);
+        DrawStringSetting("RainColor", ref keyViewerRainColorText, value => settings.KeyViewerRainColor = value);
+        DrawIntSetting("RainMaxSegments", ref keyViewerRainMaxSegmentsText, 32, 4096, value => settings.KeyViewerRainMaxSegments = value);
+        DrawFloatSetting("RainYOffsetPx", ref keyViewerRainYOffsetPxText, -50.0f, 50.0f, value => settings.KeyViewerRainYOffsetPx = value);
+
         GUILayout.BeginHorizontal();
         GUILayout.Label("MacroKeyViewerX", GUILayout.Width(140f));
         macroKeyViewerXText = GUILayout.TextField(macroKeyViewerXText, GUILayout.Width(120f));
@@ -350,6 +388,40 @@ public static class Main
         }
 
         GUILayout.EndVertical();
+    }
+
+    private static void DrawFloatSetting(string label, ref string text, float min, float max, Action<float> apply)
+    {
+        GUILayout.BeginHorizontal();
+        GUILayout.Label(label, GUILayout.Width(180f));
+        text = GUILayout.TextField(text, GUILayout.Width(120f));
+        if (float.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out float value))
+        {
+            apply(Mathf.Clamp(value, min, max));
+        }
+        GUILayout.EndHorizontal();
+    }
+
+    private static void DrawIntSetting(string label, ref string text, int min, int max, Action<int> apply)
+    {
+        GUILayout.BeginHorizontal();
+        GUILayout.Label(label, GUILayout.Width(180f));
+        text = GUILayout.TextField(text, GUILayout.Width(120f));
+        if (int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int value))
+        {
+            apply(Mathf.Clamp(value, min, max));
+        }
+        GUILayout.EndHorizontal();
+    }
+
+
+    private static void DrawStringSetting(string label, ref string text, Action<string> apply)
+    {
+        GUILayout.BeginHorizontal();
+        GUILayout.Label(label, GUILayout.Width(180f));
+        text = GUILayout.TextField(text, GUILayout.Width(120f));
+        apply(text);
+        GUILayout.EndHorizontal();
     }
 
     private static void OnSaveGUI(UnityModManager.ModEntry entry)

@@ -1,99 +1,70 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Reflection;
-using HarmonyLib;
 using UnityEngine;
 
 namespace Macro_Inserter;
 
 internal static class MacroKeyViewerRainOverlay
 {
-    private const int Columns = 8;
-    private const float CellWidth = 52.0f;
-    private const float CellHeight = 39.0f;
-    private const float CellGap = 4.0f;
-    private const float RainHeight = 135.0f;
-    private const float LeftMargin = 4.0f;
-    private const float BottomMargin = 4.0f;
-    private const float BarInsetX = 9.0f;
-    private const float MinActiveHeight = 6.0f;
-    private const float MaxActiveHeight = 46.0f;
-    private const float ReleasedScrollSpeed = 145.0f;
-    private const float ReleasedFadeSeconds = 0.75f;
-    private const int MaxSegmentsPerKey = 96;
-
-    private static readonly FieldInfo? ServiceField = AccessTools.Field(typeof(Main), "service");
-    private static readonly FieldInfo? SettingsField = AccessTools.Field(typeof(InternalMacroService), "settings");
+    private const string DefaultRainColor = "#66D9FFFF";
     private static readonly Dictionary<string, KeyRainState> KeyStates = new(StringComparer.Ordinal);
 
-    private static GameObject? host;
     private static Texture2D? pixel;
+    private static bool installLogged;
     private static float lastExceptionLogTime = -10.0f;
     private static string? lastExceptionSignature;
 
     public static void EnsureInstalled()
     {
+        if (installLogged)
+        {
+            return;
+        }
+
+        installLogged = true;
+        Debug.Log("[Macro-Inserter] MacroKeyViewer rain overlay v44 ready. UMM OnGUI is untouched.");
+    }
+
+    public static void Draw(
+        InternalMacroSettings settings,
+        IReadOnlyList<MacroKeyViewerKeySnapshot> snapshots,
+        IReadOnlyList<Rect> keyRects)
+    {
         try
         {
-            if (host != null)
-            {
-                return;
-            }
-
-            host = new GameObject("Macro-Inserter KV Rain Overlay");
-            host.hideFlags = HideFlags.HideAndDontSave;
-            UnityEngine.Object.DontDestroyOnLoad(host);
-            host.AddComponent<Behaviour>();
-            Debug.Log("[Macro-Inserter] MacroKeyViewer rain overlay v42 installed. UMM OnGUI is untouched.");
+            DrawCore(settings, snapshots, keyRects);
         }
         catch (Exception ex)
         {
-            Debug.Log($"[Macro-Inserter] MacroKeyViewer rain overlay v42 install failed: {ex.GetType().Name}: {ex.Message}");
+            LogException(ex);
         }
     }
 
-    private static void Draw()
+    private static void DrawCore(
+        InternalMacroSettings settings,
+        IReadOnlyList<MacroKeyViewerKeySnapshot> snapshots,
+        IReadOnlyList<Rect> keyRects)
     {
-        NaturalFingeringOptions.Load();
-        if (!NaturalFingeringOptions.EnableRain)
-        {
-            return;
-        }
-
-        InternalMacroService? service = ServiceField?.GetValue(null) as InternalMacroService;
-        if (service == null)
-        {
-            return;
-        }
-
-        object? settings = SettingsField?.GetValue(service);
-        if (settings == null || !ReadBool(settings, "EnableMacroKeyViewer", true))
-        {
-            return;
-        }
-
-        string keysText = ReadString(settings, "MacroKeyViewerKeysText", string.Empty);
-        double pulseSeconds = Math.Max(0.001, ReadDouble(settings, "MacroKeyViewerPulseMs", 80.0) / 1000.0);
-        MacroKeyViewerKeySnapshot[] snapshots = service.MacroKeyViewer.GetSnapshot(keysText).ToArray();
-        if (snapshots.Length == 0)
+        if (!settings.EnableKeyViewerRain ||
+            snapshots.Count == 0 ||
+            keyRects.Count == 0 ||
+            Event.current.type != EventType.Repaint)
         {
             return;
         }
 
         float now = Time.unscaledTime;
-        UpdateSegments(snapshots, now, (float)pulseSeconds);
-
-        if (Event.current.type != EventType.Repaint)
-        {
-            return;
-        }
-
-        DrawSegments(snapshots, now, (float)pulseSeconds);
+        UpdateSegments(settings, snapshots, now);
+        DrawSegments(settings, snapshots, keyRects, now);
     }
 
-    private static void UpdateSegments(IReadOnlyList<MacroKeyViewerKeySnapshot> snapshots, float now, float pulseSeconds)
+    private static void UpdateSegments(
+        InternalMacroSettings settings,
+        IReadOnlyList<MacroKeyViewerKeySnapshot> snapshots,
+        float now)
     {
+        float pulseSeconds = Mathf.Clamp(settings.KeyViewerRainPulseMs, 5.0f, 300.0f) / 1000.0f;
         HashSet<string> activeNames = new(StringComparer.Ordinal);
         foreach (MacroKeyViewerKeySnapshot snapshot in snapshots)
         {
@@ -104,20 +75,62 @@ internal static class MacroKeyViewerRainOverlay
             int countDelta = snapshot.Count - state.LastSeenCount;
             if (countDelta < 0)
             {
-                // KeyViewer counters were reset, usually because the scheduler restarted.
                 state.Segments.Clear();
-                countDelta = snapshot.Count;
+                state.ActiveSegment = null;
+                countDelta = snapshot.Count > 0 && snapshot.Pressed ? 1 : 0;
             }
 
-            for (int i = 0; i < Math.Min(countDelta, 8); i++)
+            int clampedDelta = Math.Min(countDelta, 32);
+            for (int i = 0; i < clampedDelta; i++)
             {
-                float startOffset = countDelta <= 1 ? 0.0f : i * 0.004f;
-                state.Segments.Add(new RainSegment(now + startOffset, pulseSeconds));
+                // Keep burst hits visually separated instead of stacking all bands on a single pixel.
+                float startTime = now - (clampedDelta - i - 1) * 0.004f;
+                RainSegment segment = new(startTime, pulseSeconds);
+                ReleaseActiveSegment(state, now, settings);
+                state.Segments.Add(segment);
+                state.ActiveSegment = segment;
+            }
+
+            // RainingKeys-style fallback: key-down starts a band, key-up releases it.
+            // This also covers frames where count-delta was missed but Pressed is visible.
+            if (snapshot.Pressed)
+            {
+                if (!state.WasPressed && clampedDelta == 0)
+                {
+                    RainSegment segment = new(now, pulseSeconds);
+                    ReleaseActiveSegment(state, now, settings);
+                    state.Segments.Add(segment);
+                    state.ActiveSegment = segment;
+                }
+                else if (state.ActiveSegment == null && state.Segments.Count > 0)
+                {
+                    RainSegment last = state.Segments[state.Segments.Count - 1];
+                    if (!last.Released)
+                    {
+                        state.ActiveSegment = last;
+                    }
+                }
+            }
+            else
+            {
+                ReleaseActiveSegment(state, now, settings);
+            }
+
+            if (state.ActiveSegment != null && now - state.ActiveSegment.StartTime >= pulseSeconds)
+            {
+                ReleaseActiveSegment(state, state.ActiveSegment.StartTime + pulseSeconds, settings);
             }
 
             state.LastSeenCount = snapshot.Count;
-            TrimSegments(state, now);
+            state.WasPressed = snapshot.Pressed;
         }
+
+        foreach (KeyRainState state in KeyStates.Values)
+        {
+            TrimExpiredSegments(settings, state, now);
+        }
+
+        TrimTotalSegments(settings);
 
         if (KeyStates.Count > snapshots.Count + 16)
         {
@@ -126,6 +139,21 @@ internal static class MacroKeyViewerRainOverlay
                 KeyStates.Remove(key);
             }
         }
+    }
+
+    private static void ReleaseActiveSegment(KeyRainState state, float now, InternalMacroSettings settings)
+    {
+        if (state.ActiveSegment == null)
+        {
+            return;
+        }
+
+        if (!state.ActiveSegment.Released)
+        {
+            state.ActiveSegment.Release(now, settings);
+        }
+
+        state.ActiveSegment = null;
     }
 
     private static KeyRainState GetState(string keyName)
@@ -139,62 +167,126 @@ internal static class MacroKeyViewerRainOverlay
         return state;
     }
 
-    private static void TrimSegments(KeyRainState state, float now)
+    private static void TrimExpiredSegments(InternalMacroSettings settings, KeyRainState state, float now)
     {
-        state.Segments.RemoveAll(segment => segment.Alpha(now) <= 0.01f || segment.TopY(now) > RainHeight + 60.0f);
-        if (state.Segments.Count <= MaxSegmentsPerKey)
+        state.Segments.RemoveAll(segment => segment.IsExpired(now, settings));
+        if (state.ActiveSegment != null && !state.Segments.Contains(state.ActiveSegment))
         {
-            return;
+            state.ActiveSegment = null;
         }
-
-        int removeCount = state.Segments.Count - MaxSegmentsPerKey;
-        state.Segments.RemoveRange(0, removeCount);
     }
 
-    private static void DrawSegments(IReadOnlyList<MacroKeyViewerKeySnapshot> snapshots, float now, float pulseSeconds)
+    private static void TrimTotalSegments(InternalMacroSettings settings)
     {
-        Texture2D texture = GetPixelTexture();
-        int rows = Math.Max(1, (snapshots.Count + Columns - 1) / Columns);
-        float startX = LeftMargin;
-        float baseY = Screen.height - BottomMargin - rows * (CellHeight + CellGap);
-
-        for (int i = 0; i < snapshots.Count; i++)
+        int maxSegments = Mathf.Clamp(settings.KeyViewerRainMaxSegments, 32, 4096);
+        int total = KeyStates.Values.Sum(state => state.Segments.Count);
+        while (total > maxSegments)
         {
-            MacroKeyViewerKeySnapshot snapshot = snapshots[i];
-            if (!KeyStates.TryGetValue(snapshot.Name, out KeyRainState state) || state.Segments.Count == 0)
+            KeyRainState? oldestState = null;
+            float oldestStartTime = float.PositiveInfinity;
+            foreach (KeyRainState state in KeyStates.Values)
             {
-                continue;
-            }
-
-            int col = i % Columns;
-            int row = i / Columns;
-            float x = startX + col * (CellWidth + CellGap) + BarInsetX;
-            float keyTop = baseY + row * (CellHeight + CellGap);
-            float width = CellWidth - BarInsetX * 2.0f;
-
-            foreach (RainSegment segment in state.Segments)
-            {
-                float alpha = segment.Alpha(now);
-                if (alpha <= 0.01f)
+                if (state.Segments.Count == 0)
                 {
                     continue;
                 }
 
-                float height = segment.Height(now);
-                float offset = segment.ScrollOffset(now);
-                float bottom = keyTop - offset;
-                float y = bottom - height;
-                Rect rect = new Rect(x, y, width, height);
-                Color color = segment.IsActive(now)
-                    ? new Color(0.62f, 0.18f, 1.0f, 0.90f * alpha)
-                    : new Color(0.55f, 0.12f, 0.95f, 0.62f * alpha);
-                DrawRect(rect, color, texture);
+                float startTime = state.Segments[0].StartTime;
+                if (startTime < oldestStartTime)
+                {
+                    oldestStartTime = startTime;
+                    oldestState = state;
+                }
             }
+
+            if (oldestState == null)
+            {
+                return;
+            }
+
+            RainSegment removed = oldestState.Segments[0];
+            oldestState.Segments.RemoveAt(0);
+            if (ReferenceEquals(oldestState.ActiveSegment, removed))
+            {
+                oldestState.ActiveSegment = null;
+            }
+
+            total--;
+        }
+    }
+
+    private static void DrawSegments(
+        InternalMacroSettings settings,
+        IReadOnlyList<MacroKeyViewerKeySnapshot> snapshots,
+        IReadOnlyList<Rect> keyRects,
+        float now)
+    {
+        Texture2D texture = GetPixelTexture();
+        int count = Math.Min(snapshots.Count, keyRects.Count);
+        float widthScale = Mathf.Clamp(settings.KeyViewerRainWidthScale, 0.1f, 1.5f);
+        float minHeight = Mathf.Clamp(settings.KeyViewerRainMinHeightPx, 1.0f, 80.0f);
+        float maxHeight = Mathf.Clamp(settings.KeyViewerRainMaxHeightPx, minHeight, 300.0f);
+        float alphaScale = Mathf.Clamp01(settings.KeyViewerRainAlpha);
+        float yOffset = Mathf.Clamp(settings.KeyViewerRainYOffsetPx, -50.0f, 50.0f);
+        Color fallbackRainColor = ColorUtility.TryParseHtmlString(DefaultRainColor, out Color parsedFallback)
+            ? parsedFallback
+            : Color.cyan;
+        Color pressedFallbackColor = ParseColor(settings.MacroKeyViewerPressedColor, fallbackRainColor);
+        Color baseColor = ParseColor(settings.KeyViewerRainColor, pressedFallbackColor);
+
+        int oldDepth = GUI.depth;
+        GUI.depth = Math.Min(oldDepth, -10000);
+        try
+        {
+            for (int i = 0; i < count; i++)
+            {
+                MacroKeyViewerKeySnapshot snapshot = snapshots[i];
+                if (!KeyStates.TryGetValue(snapshot.Name, out KeyRainState state) || state.Segments.Count == 0)
+                {
+                    continue;
+                }
+
+                Rect keyRect = keyRects[i];
+                if (keyRect.width <= 1.0f || keyRect.height <= 1.0f)
+                {
+                    continue;
+                }
+
+                float width = Mathf.Max(1.0f, keyRect.width * widthScale);
+                float x = keyRect.x + (keyRect.width - width) * 0.5f;
+                float anchorY = keyRect.y - yOffset;
+
+                foreach (RainSegment segment in state.Segments)
+                {
+                    float alpha = segment.Alpha(now, settings) * alphaScale;
+                    if (alpha <= 0.01f)
+                    {
+                        continue;
+                    }
+
+                    float height = segment.Height(now, settings, minHeight, maxHeight);
+                    float offset = segment.ScrollOffset(now, settings);
+                    float bottom = anchorY - offset;
+                    Rect rect = new(x, bottom - height, width, height);
+                    Color color = baseColor;
+                    color.a *= segment.Released ? alpha * 0.78f : alpha;
+                    DrawRect(rect, color, texture);
+                }
+            }
+        }
+        finally
+        {
+            GUI.depth = oldDepth;
         }
     }
 
     private static void DrawRect(Rect rect, Color color, Texture2D texture)
     {
+        if (rect.height <= 0.5f || rect.width <= 0.5f)
+        {
+            return;
+        }
+
         Color old = GUI.color;
         GUI.color = color;
         GUI.DrawTexture(rect, texture);
@@ -217,34 +309,12 @@ internal static class MacroKeyViewerRainOverlay
         return pixel;
     }
 
-    private static bool ReadBool(object target, string fieldName, bool fallback)
+    private static Color ParseColor(string? configuredColor, Color fallback)
     {
-        FieldInfo? field = AccessTools.Field(target.GetType(), fieldName);
-        if (field == null || field.GetValue(target) is not bool value)
-        {
-            return fallback;
-        }
-
-        return value;
-    }
-
-    private static string ReadString(object target, string fieldName, string fallback)
-    {
-        FieldInfo? field = AccessTools.Field(target.GetType(), fieldName);
-        return field?.GetValue(target) as string ?? fallback;
-    }
-
-    private static double ReadDouble(object target, string fieldName, double fallback)
-    {
-        FieldInfo? field = AccessTools.Field(target.GetType(), fieldName);
-        object? raw = field?.GetValue(target);
-        return raw switch
-        {
-            double value => value,
-            float value => value,
-            int value => value,
-            _ => fallback
-        };
+        configuredColor ??= string.Empty;
+        return ColorUtility.TryParseHtmlString(configuredColor, out Color color)
+            ? color
+            : fallback;
     }
 
     private static void LogException(Exception ex)
@@ -259,77 +329,111 @@ internal static class MacroKeyViewerRainOverlay
 
         lastExceptionSignature = signature;
         lastExceptionLogTime = Time.unscaledTime;
-        Debug.Log($"[Macro-Inserter] MacroKeyViewer rain overlay v42 suppressed {signature}");
+        Debug.Log($"[Macro-Inserter] MacroKeyViewer rain overlay suppressed {signature}");
     }
 
     private sealed class KeyRainState
     {
         public int LastSeenCount { get; set; }
+        public bool WasPressed { get; set; }
+        public RainSegment? ActiveSegment { get; set; }
         public List<RainSegment> Segments { get; } = new();
     }
 
-    private readonly struct RainSegment
+    private sealed class RainSegment
     {
-        private readonly float startTime;
         private readonly float activeSeconds;
+        private float releaseTime;
+        private float releaseHeight;
 
         public RainSegment(float startTime, float activeSeconds)
         {
-            this.startTime = startTime;
+            StartTime = startTime;
             this.activeSeconds = Math.Max(0.001f, activeSeconds);
+            releaseTime = -1.0f;
+            releaseHeight = 0.0f;
         }
 
-        private float ReleaseTime => startTime + activeSeconds;
+        public float StartTime { get; }
+        public bool Released => releaseTime >= 0.0f;
 
-        public bool IsActive(float now)
+        public void Release(float now, InternalMacroSettings settings)
         {
-            return now < ReleaseTime;
+            if (Released)
+            {
+                return;
+            }
+
+            releaseTime = Math.Max(StartTime, now);
+            float minHeight = Mathf.Clamp(settings.KeyViewerRainMinHeightPx, 1.0f, 80.0f);
+            float maxHeight = Mathf.Clamp(settings.KeyViewerRainMaxHeightPx, minHeight, 300.0f);
+            releaseHeight = Height(releaseTime, settings, minHeight, maxHeight);
         }
 
-        public float Height(float now)
+        public float Height(float now, InternalMacroSettings settings, float minHeight, float maxHeight)
         {
-            float activeT = Mathf.Clamp01((now - startTime) / activeSeconds);
-            return Mathf.Lerp(MinActiveHeight, MaxActiveHeight, activeT);
+            if (Released)
+            {
+                return Mathf.Clamp(releaseHeight, minHeight, maxHeight);
+            }
+
+            // RainingKeys style: while the key is down, the band grows at rain speed.
+            float speed = Mathf.Clamp(settings.KeyViewerRainSpeedPxPerSec, 20.0f, 2000.0f);
+            float activeAge = Mathf.Max(0.0f, now - StartTime);
+            return Mathf.Clamp(minHeight + activeAge * speed, minHeight, maxHeight);
         }
 
-        public float ScrollOffset(float now)
+        public float ScrollOffset(float now, InternalMacroSettings settings)
         {
-            if (now <= ReleaseTime)
+            if (!Released)
             {
                 return 0.0f;
             }
 
-            return (now - ReleaseTime) * ReleasedScrollSpeed;
+            float speed = Mathf.Clamp(settings.KeyViewerRainSpeedPxPerSec, 20.0f, 2000.0f);
+            return Mathf.Max(0.0f, now - releaseTime) * speed;
         }
 
-        public float Alpha(float now)
+        public float Alpha(float now, InternalMacroSettings settings)
         {
-            if (now <= ReleaseTime)
+            if (now < StartTime)
             {
-                return Mathf.Clamp01((now - startTime) / 0.015f);
+                return 0.0f;
             }
 
-            return Mathf.Clamp01(1.0f - (now - ReleaseTime) / ReleasedFadeSeconds);
+            if (!Released)
+            {
+                return Mathf.Clamp01((now - StartTime) / 0.015f);
+            }
+
+            float fadeSeconds = FadeSeconds(settings);
+            if (fadeSeconds <= 0.0001f)
+            {
+                return 0.0f;
+            }
+
+            return Mathf.Clamp01(1.0f - (now - releaseTime) / fadeSeconds);
         }
 
-        public float TopY(float now)
+        public bool IsExpired(float now, InternalMacroSettings settings)
         {
-            return ScrollOffset(now) + Height(now);
-        }
-    }
+            if (!Released)
+            {
+                return false;
+            }
 
-    private sealed class Behaviour : MonoBehaviour
-    {
-        private void OnGUI()
+            float fadeSeconds = FadeSeconds(settings);
+            if (fadeSeconds <= 0.0001f)
+            {
+                return true;
+            }
+
+            return now - releaseTime > fadeSeconds;
+        }
+
+        private static float FadeSeconds(InternalMacroSettings settings)
         {
-            try
-            {
-                Draw();
-            }
-            catch (Exception ex)
-            {
-                LogException(ex);
-            }
+            return Mathf.Clamp(settings.KeyViewerRainFadeMs, 0.0f, 3000.0f) / 1000.0f;
         }
     }
 }
