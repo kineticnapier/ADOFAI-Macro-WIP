@@ -14,6 +14,12 @@
       <HintPath>$(ADOFAIManagedDir)\UnityModManager\0Harmony.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="Assembly-CSharp">
+      <HintPath>C:\Program Files (x86)\Steam\steamapps\common\A Dance of Fire and Ice\A Dance of Fire and Ice_Data\Managed\Assembly-CSharp.dll</HintPath>
+    </Reference>
+    <Reference Include="RDTools">
+      <HintPath>C:\Program Files (x86)\Steam\steamapps\common\A Dance of Fire and Ice\A Dance of Fire and Ice_Data\Managed\RDTools.dll</HintPath>
+    </Reference>
     <Reference Include="UnityModManager">
       <HintPath>$(ADOFAIManagedDir)\UnityModManager\UnityModManager.dll</HintPath>
       <Private>false</Private>

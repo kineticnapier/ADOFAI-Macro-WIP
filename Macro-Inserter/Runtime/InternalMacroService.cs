@@ -60,6 +60,7 @@ internal sealed class InternalMacroService
     private long macroKeyViewerHitCounter;
 
     public MacroKeyViewerState MacroKeyViewer { get; } = new();
+    public bool IsInternalMacroActive => running || armed;
     public int HitDiffSampleCount => hitDiffSampleCount;
     public double AverageHitDiffMs => hitDiffSampleCount == 0 ? 0.0 : hitDiffTotalMs / hitDiffSampleCount;
     public double MaxAbsHitDiffMs => hitDiffMaxAbsMs;
@@ -1016,14 +1017,7 @@ internal sealed class InternalMacroService
             return 1;
         }
 
-        int configured = Math.Max(1, settings.MaxHitsPerPlayerControlUpdate);
-        if (!settings.EnableCameraSafeMode)
-        {
-            return configured;
-        }
-
-        int cameraSafeCap = Math.Max(1, settings.CameraSafeMaxHitsPerPlayerControlUpdate);
-        return Math.Min(configured, cameraSafeCap);
+        return Math.Max(1, settings.MaxHitsPerPlayerControlUpdate);
     }
 
     private bool TryFirePseudoChordGroup(

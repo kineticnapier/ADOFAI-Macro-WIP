@@ -22,6 +22,8 @@ public static class Main
     private static string maxHitsPerPseudoChordGroupText = "8";
     private static string virtualInputKeyCountText = "1";
     private static string macroKeyViewerPulseMsText = "80";
+    private static string macroKeyViewerMaxPulseCallsPerEntryText = "16";
+    private static string suppressShortAudioMaxClipSecondsText = "2";
     private static string macroKeyViewerXText = "20";
     private static string macroKeyViewerYText = "-160";
     private static string macroKeyViewerScaleText = "1";
@@ -47,8 +49,6 @@ public static class Main
     private static string directKeyTimesProcessingSpikeLogMsText = "8";
     private static string directKeyTimesSpikeLogMinIntervalMsText = "50";
     private static string directKeyTimesDeferredDumpEntriesText = "32";
-    private static string cameraSafeMaxHitsPerPlayerControlUpdateText = "8";
-    private static string cameraSafeQueueLeadMsText = "4";
     private static bool enabled;
     private static float lastOnUpdateExceptionLogTime = -10.0f;
     private static string? lastOnUpdateExceptionSignature;
@@ -67,6 +67,8 @@ public static class Main
         maxHitsPerPseudoChordGroupText = settings.MaxHitsPerPseudoChordGroup.ToString(CultureInfo.InvariantCulture);
         virtualInputKeyCountText = settings.VirtualInputKeyCount.ToString(CultureInfo.InvariantCulture);
         macroKeyViewerPulseMsText = settings.MacroKeyViewerPulseMs.ToString(CultureInfo.InvariantCulture);
+        macroKeyViewerMaxPulseCallsPerEntryText = settings.MacroKeyViewerMaxPulseCallsPerEntry.ToString(CultureInfo.InvariantCulture);
+        suppressShortAudioMaxClipSecondsText = settings.SuppressShortAudioMaxClipSeconds.ToString(CultureInfo.InvariantCulture);
         macroKeyViewerXText = settings.MacroKeyViewerX.ToString(CultureInfo.InvariantCulture);
         macroKeyViewerYText = settings.MacroKeyViewerY.ToString(CultureInfo.InvariantCulture);
         macroKeyViewerScaleText = settings.MacroKeyViewerScale.ToString(CultureInfo.InvariantCulture);
@@ -91,10 +93,6 @@ public static class Main
         keyViewerRainYOffsetPxText = settings.KeyViewerRainYOffsetPx.ToString(CultureInfo.InvariantCulture);
         settings.DirectKeyTimesDeferredDumpEntries = Math.Max(0, Math.Min(64, settings.DirectKeyTimesDeferredDumpEntries));
         directKeyTimesDeferredDumpEntriesText = settings.DirectKeyTimesDeferredDumpEntries.ToString(CultureInfo.InvariantCulture);
-        settings.CameraSafeMaxHitsPerPlayerControlUpdate = Math.Max(1, Math.Min(128, settings.CameraSafeMaxHitsPerPlayerControlUpdate));
-        cameraSafeMaxHitsPerPlayerControlUpdateText = settings.CameraSafeMaxHitsPerPlayerControlUpdate.ToString(CultureInfo.InvariantCulture);
-        settings.CameraSafeQueueLeadMs = Math.Max(0.0, Math.Min(50.0, settings.CameraSafeQueueLeadMs));
-        cameraSafeQueueLeadMsText = settings.CameraSafeQueueLeadMs.ToString(CultureInfo.InvariantCulture);
         NaturalFingeringOptions.Load();
         settings.LoggingMode = NormalizeLoggingMode(settings.LoggingMode);
         NaturalFingeringOptions.LogMode = NaturalFingeringOptions.FromLoggingMode(settings.LoggingMode);
@@ -249,17 +247,6 @@ public static class Main
         }
         GUILayout.EndHorizontal();
 
-        settings.EnableCameraSafeMode = GUILayout.Toggle(settings.EnableCameraSafeMode, "EnableCameraSafeMode");
-        settings.CameraSafeStrictMode = GUILayout.Toggle(settings.CameraSafeStrictMode, "CameraSafeStrictMode");
-        settings.CameraSafeSplitInputGroups = GUILayout.Toggle(settings.CameraSafeSplitInputGroups, "CameraSafeSplitInputGroups");
-        settings.CameraSafeQueueOnlyMode = GUILayout.Toggle(settings.CameraSafeQueueOnlyMode, "CameraSafeQueueOnlyMode");
-        settings.CameraSafePulseKeyViewerOnQueue = GUILayout.Toggle(settings.CameraSafePulseKeyViewerOnQueue, "CameraSafePulseKeyViewerOnQueue");
-        DrawIntSetting("CameraSafeMaxHits/Update", ref cameraSafeMaxHitsPerPlayerControlUpdateText, 1, 128, value => settings.CameraSafeMaxHitsPerPlayerControlUpdate = value);
-        DrawDoubleSetting("CameraSafeQueueLeadMs", ref cameraSafeQueueLeadMsText, 0.0, 50.0, value => settings.CameraSafeQueueLeadMs = value);
-        GUILayout.Label("Camera safe strict mode limits runtime directKeyTimes to 1 plan entry per PlayerControl_Update and splits grouped runtime inputs before fingering.");
-        GUILayout.Label("QueueOnly mode avoids forced Simulated_PlayerControl_Update; queued keyTimes are consumed by the game update path instead.");
-        GUILayout.Label("QueueLeadMs advances only queue insertion in CameraSafeQueueOnlyMode to compensate the one-frame consume delay. Increase if judgement leans right/late.");
-
         GUILayout.BeginHorizontal();
         GUILayout.Label("PseudoChordWindowMs", GUILayout.Width(140f));
         pseudoChordWindowMsText = GUILayout.TextField(pseudoChordWindowMsText, GUILayout.Width(120f));
@@ -326,6 +313,31 @@ public static class Main
             settings.MacroKeyViewerPulseMs = Math.Max(0, pulseMs);
         }
         GUILayout.EndHorizontal();
+
+        settings.EnableMacroKeyViewerPulseCoalescing = GUILayout.Toggle(settings.EnableMacroKeyViewerPulseCoalescing, "EnableMacroKeyViewerPulseCoalescing");
+        GUILayout.Label("Coalesces dense KV pulses into per-key counter updates. Counts are preserved; it just avoids thousands of Pulse() calls in one frame.");
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("KV MaxPulseCalls/Entry", GUILayout.Width(180f));
+        macroKeyViewerMaxPulseCallsPerEntryText = GUILayout.TextField(macroKeyViewerMaxPulseCallsPerEntryText, GUILayout.Width(120f));
+        if (int.TryParse(macroKeyViewerMaxPulseCallsPerEntryText, NumberStyles.Integer, CultureInfo.InvariantCulture, out int maxKvPulseCalls))
+        {
+            settings.MacroKeyViewerMaxPulseCallsPerEntry = Math.Max(1, maxKvPulseCalls);
+        }
+        GUILayout.EndHorizontal();
+        settings.SuppressOneShotAudioWhileInternalMacroRuns = GUILayout.Toggle(settings.SuppressOneShotAudioWhileInternalMacroRuns, "SuppressShortAudioWhileInternalMacroRuns");
+        GUILayout.Label("Recommended for 1000+ KPS verification. Suppresses one-shot and short hit sounds while the internal macro is active.");
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("ShortAudioMaxSeconds", GUILayout.Width(180f));
+        suppressShortAudioMaxClipSecondsText = GUILayout.TextField(suppressShortAudioMaxClipSecondsText, GUILayout.Width(120f));
+        if (float.TryParse(suppressShortAudioMaxClipSecondsText, NumberStyles.Float, CultureInfo.InvariantCulture, out float shortAudioSeconds))
+        {
+            settings.SuppressShortAudioMaxClipSeconds = Math.Max(0.01f, shortAudioSeconds);
+        }
+        GUILayout.EndHorizontal();
+        settings.SuppressVisualTweensWhileInternalMacroRuns = GUILayout.Toggle(settings.SuppressVisualTweensWhileInternalMacroRuns, "SuppressVisualTweensWhileInternalMacroRuns");
+        GUILayout.Label("Ultra-density survival: blocks DOTween active tween registration while internal macro is enabled. Use for 1000+ KPS verification maps with massive visual/tween load.");
+        settings.SuppressUnloadUnusedAssetsWhileInternalMacroRuns = GUILayout.Toggle(settings.SuppressUnloadUnusedAssetsWhileInternalMacroRuns, "SuppressUnloadUnusedAssetsWhileInternalMacroRuns");
+        GUILayout.Label("Prevents Resources.UnloadUnusedAssets() from stalling playback while the internal macro is enabled/active.");
 
         GUILayout.Label("Macro KeyViewer Rain");
         settings.EnableKeyViewerRain = GUILayout.Toggle(settings.EnableKeyViewerRain, "EnableKeyViewerRain");

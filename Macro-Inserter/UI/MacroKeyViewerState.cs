@@ -10,7 +10,8 @@ internal sealed class MacroKeyViewerState
     private const float KpsWindowSeconds = 1.0f;
 
     private readonly List<KeySlot> keys = new();
-    private readonly Queue<float> recentPulseTimes = new();
+    private readonly Queue<PulseBucket> recentPulseBuckets = new();
+    private int recentPulseCount;
     private string configuredKeysText = string.Empty;
 
     public float Kps { get; private set; }
@@ -44,7 +45,12 @@ internal sealed class MacroKeyViewerState
 
     public void Pulse(string keyName, double durationSeconds)
     {
-        if (string.IsNullOrWhiteSpace(keyName))
+        Pulse(keyName, durationSeconds, 1);
+    }
+
+    public void Pulse(string keyName, double durationSeconds, int count)
+    {
+        if (string.IsNullOrWhiteSpace(keyName) || count <= 0)
         {
             return;
         }
@@ -59,8 +65,9 @@ internal sealed class MacroKeyViewerState
         }
 
         key.PressedUntilTime = Math.Max(key.PressedUntilTime, now + duration);
-        key.Count++;
-        recentPulseTimes.Enqueue(now);
+        key.Count += count;
+        recentPulseBuckets.Enqueue(new PulseBucket(now, count));
+        recentPulseCount += count;
         TrimRecentPulseTimes(now);
     }
 
@@ -85,7 +92,8 @@ internal sealed class MacroKeyViewerState
             key.PressedUntilTime = 0.0f;
         }
 
-        recentPulseTimes.Clear();
+        recentPulseBuckets.Clear();
+        recentPulseCount = 0;
         Kps = 0.0f;
     }
 
@@ -106,12 +114,29 @@ internal sealed class MacroKeyViewerState
 
     private void TrimRecentPulseTimes(float now)
     {
-        while (recentPulseTimes.Count > 0 && now - recentPulseTimes.Peek() > KpsWindowSeconds)
+        while (recentPulseBuckets.Count > 0 && now - recentPulseBuckets.Peek().Time > KpsWindowSeconds)
         {
-            recentPulseTimes.Dequeue();
+            recentPulseCount -= recentPulseBuckets.Dequeue().Count;
         }
 
-        Kps = recentPulseTimes.Count / KpsWindowSeconds;
+        if (recentPulseCount < 0)
+        {
+            recentPulseCount = 0;
+        }
+
+        Kps = recentPulseCount / KpsWindowSeconds;
+    }
+
+    private readonly struct PulseBucket
+    {
+        public PulseBucket(float time, int count)
+        {
+            Time = time;
+            Count = count;
+        }
+
+        public float Time { get; }
+        public int Count { get; }
     }
 
     private sealed class KeySlot

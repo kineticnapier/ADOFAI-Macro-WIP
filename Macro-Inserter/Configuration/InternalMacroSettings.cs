@@ -31,6 +31,12 @@ public sealed class InternalMacroSettings : UnityModManager.ModSettings
     public bool EnableMacroKeyViewer = false;
     public string MacroKeyViewerKeysText = "A B C D E F G H I J K L Q R S T";
     public int MacroKeyViewerPulseMs = 80;
+    public bool EnableMacroKeyViewerPulseCoalescing = true;
+    public int MacroKeyViewerMaxPulseCallsPerEntry = 16;
+    public bool SuppressOneShotAudioWhileInternalMacroRuns = true;
+    public float SuppressShortAudioMaxClipSeconds = 2.0f;
+    public bool SuppressVisualTweensWhileInternalMacroRuns = true;
+    public bool SuppressUnloadUnusedAssetsWhileInternalMacroRuns = true;
     public float MacroKeyViewerX = 20.0f;
     public float MacroKeyViewerY = -160.0f;
     public float MacroKeyViewerScale = 1.0f;
@@ -55,25 +61,6 @@ public sealed class InternalMacroSettings : UnityModManager.ModSettings
     public bool DirectKeyTimesDumpOnlyOnFailure = true;
     public bool DirectKeyTimesDumpOnWin = false;
     public int DirectKeyTimesDeferredDumpEntries = 32;
-
-    // v48: camera-safe mode prevents the runtime directKeyTimes plan from
-    // advancing too many floors in one PlayerControl_Update after a hitch.
-    public bool EnableCameraSafeMode = true;
-    public int CameraSafeMaxHitsPerPlayerControlUpdate = 1;
-    public bool CameraSafeStrictMode = true;
-    public bool CameraSafeSplitInputGroups = true;
-    // v50: queue keyTimes and let the game's normal PlayerControl_Update consume them.
-    // This avoids calling Simulated_PlayerControl_Update inside the macro hot path,
-    // which can advance floors before camera/track state has caught up.
-    public bool CameraSafeQueueOnlyMode = true;
-    // v51: queue-only mode consumes input on the next normal game update, which
-    // can make hits visually/judgement-wise late. This is not the global
-    // DispatchLeadMs; it only advances queue insertion for camera-safe queue-only.
-    public double CameraSafeQueueLeadMs = 4.0;
-
-    // v51: queue-only mode no longer observes immediate floor advance, so pulse
-    // MacroKeyViewer when the input is queued, not only when the floor confirms.
-    public bool CameraSafePulseKeyViewerOnQueue = true;
 
     public override void Save(UnityModManager.ModEntry modEntry)
     {

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Reflection.Emit;
 using HarmonyLib;
 using UnityEngine;
 using UnityEngine.Profiling;
@@ -18,8 +19,9 @@ namespace Macro_Inserter
 {
     internal static class PseudoChordInputPlanFix
     {
-        private static readonly Harmony Harmony = new Harmony("Macro-Inserter.PseudoChordInputPlanFix.v52");
+        private static readonly Harmony Harmony = new Harmony("Macro-Inserter.PseudoChordInputPlanFix.v64");
         private static readonly FieldInfo? SettingsField = AccessTools.Field(typeof(InternalMacroService), "settings");
+        private static readonly FieldInfo? MainServiceField = AccessTools.Field(typeof(Main), "service");
         private static readonly FieldInfo? LogField = AccessTools.Field(typeof(InternalMacroService), "log");
         private static readonly FieldInfo? InputPlanField = AccessTools.Field(typeof(InternalMacroService), "inputPlan");
         private static readonly FieldInfo? NextIndexField = AccessTools.Field(typeof(InternalMacroService), "nextIndex");
@@ -39,7 +41,6 @@ namespace Macro_Inserter
         private static double lastDirectKeyTimesSummaryRealtime;
         private static int stuckPlainSingleSeqId = -1;
         private static int stuckPlainSingleAttemptCount;
-        private static int lastQueueOnlyKeyViewerPulseSeqId = -1;
         private static readonly DeferredDirectKeyTimesTrace[] DeferredTraceRing = new DeferredDirectKeyTimesTrace[DeferredTraceCapacity];
         private static int deferredTraceWriteIndex;
         private static int deferredTraceCount;
@@ -52,6 +53,8 @@ namespace Macro_Inserter
         private static double deferredMaxProcessingMs;
         private static double deferredMaxDeltaMs;
         private static int deferredMaxAfterFloor;
+        private static bool perfectOverrideSeenActive;
+        private static bool hitErrorMeterResetForActiveRun;
 
         private struct DirectKeyTimesTrace
         {
@@ -212,18 +215,11 @@ namespace Macro_Inserter
                     .Where(method => method.Name == "TryFirePseudoChordGroup")
                     .ToArray();
 
-                MethodInfo? effectiveTargetOriginal = AccessTools.Method(
-                    typeof(InternalMacroService),
-                    "GetEffectiveTargetTimeSeconds",
-                    new[] { typeof(InputPlanEntry) });
-                MethodInfo? effectiveTargetPostfix = AccessTools.Method(typeof(PseudoChordInputPlanFix), nameof(GetEffectiveInputTargetTimePostfix));
-
                 NaturalFingeringOptions.Load();
                 MacroKeyViewerRainOverlay.EnsureInstalled();
 
                 bool buildPatched = false;
                 bool firePatched = false;
-                bool queueLeadPatched = false;
                 if (buildOriginal != null && buildPrefix != null)
                 {
                     Harmony.Patch(buildOriginal, prefix: new HarmonyMethod(buildPrefix));
@@ -239,40 +235,865 @@ namespace Macro_Inserter
                     }
                 }
 
-                if (effectiveTargetOriginal != null && effectiveTargetPostfix != null)
-                {
-                    Harmony.Patch(effectiveTargetOriginal, postfix: new HarmonyMethod(effectiveTargetPostfix));
-                    queueLeadPatched = true;
-                }
+                bool audioPatched = TryPatchOneShotAudio();
+                bool visualPatched = TryPatchUltraDensityVisualSuppressors();
+                bool perfectOverridePatched = TryPatchVerificationPerfectOverride();
 
                 patched = buildPatched && firePatched;
-                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v52 installed by {reason}. buildPatched={buildPatched} firePatched={firePatched} queueLeadPatched={queueLeadPatched} rainOverlay=True uiPatchDisabled=True loadPatchDisabled=True logPatchDisabled=True");
+                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v64 installed by {reason}. buildPatched={buildPatched} firePatched={firePatched} audioPatched={audioPatched} visualPatched={visualPatched} perfectOverridePatched={perfectOverridePatched} rainOverlay=True uiPatchDisabled=True loadPatchDisabled=True logPatchDisabled=True");
             }
             catch (Exception ex)
             {
-                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v52 install failed: {ex}");
+                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v64 install failed: {ex}");
             }
         }
 
-        private static void GetEffectiveInputTargetTimePostfix(
-            InternalMacroService __instance,
-            InputPlanEntry entry,
-            ref double __result)
+
+
+        private static bool TryPatchVerificationPerfectOverride()
         {
-            InternalMacroSettings? settings = SettingsField?.GetValue(__instance) as InternalMacroSettings;
-            if (settings == null ||
-                !settings.EnableCameraSafeMode ||
-                !settings.CameraSafeQueueOnlyMode ||
-                settings.CameraSafeQueueLeadMs <= 0.0)
+            int patchedCount = 0;
+            try
+            {
+                MethodInfo? getHitMargin = AccessTools.Method(
+                    typeof(scrMisc),
+                    nameof(scrMisc.GetHitMargin),
+                    new[] { typeof(float), typeof(float), typeof(bool), typeof(float), typeof(float), typeof(double) });
+                MethodInfo? getHitMarginPrefix = AccessTools.Method(typeof(PseudoChordInputPlanFix), nameof(ScrMiscGetHitMarginPrefix));
+                if (getHitMargin != null && getHitMarginPrefix != null)
+                {
+                    Harmony.Patch(getHitMargin, prefix: new HarmonyMethod(getHitMarginPrefix));
+                    patchedCount++;
+                }
+
+                MethodInfo? addHit = AccessTools.Method(typeof(scrMistakesManager), nameof(scrMistakesManager.AddHit), new[] { typeof(HitMargin) });
+                MethodInfo? addHitPrefix = AccessTools.Method(typeof(PseudoChordInputPlanFix), nameof(ScrMistakesManagerAddHitPrefix));
+                if (addHit != null && addHitPrefix != null)
+                {
+                    Harmony.Patch(addHit, prefix: new HarmonyMethod(addHitPrefix));
+                    patchedCount++;
+                }
+
+                MethodInfo? showHitText = AccessTools.Method(typeof(scrController), nameof(scrController.ShowHitText), new[] { typeof(HitMargin), typeof(Vector3), typeof(float) });
+                MethodInfo? showHitTextPrefix = AccessTools.Method(typeof(PseudoChordInputPlanFix), nameof(ScrControllerShowHitTextPrefix));
+                if (showHitText != null && showHitTextPrefix != null)
+                {
+                    Harmony.Patch(showHitText, prefix: new HarmonyMethod(showHitTextPrefix));
+                    patchedCount++;
+                }
+
+                MethodInfo? onDamage = AccessTools.Method(typeof(scrController), nameof(scrController.OnDamage), new[] { typeof(bool), typeof(bool), typeof(bool), typeof(HitMargin) });
+                MethodInfo? onDamagePrefix = AccessTools.Method(typeof(PseudoChordInputPlanFix), nameof(ScrControllerOnDamagePrefix));
+                if (onDamage != null && onDamagePrefix != null)
+                {
+                    Harmony.Patch(onDamage, prefix: new HarmonyMethod(onDamagePrefix));
+                    patchedCount++;
+                }
+
+                MethodInfo? failAction = AccessTools.Method(typeof(scrController), nameof(scrController.FailAction), new[] { typeof(bool), typeof(bool), typeof(string), typeof(bool) });
+                MethodInfo? failActionPrefix = AccessTools.Method(typeof(PseudoChordInputPlanFix), nameof(ScrControllerFailActionPrefix));
+                if (failAction != null && failActionPrefix != null)
+                {
+                    Harmony.Patch(failAction, prefix: new HarmonyMethod(failActionPrefix));
+                    patchedCount++;
+                }
+
+                MethodInfo? switchChosen = AccessTools.Method(typeof(scrPlanet), nameof(scrPlanet.SwitchChosen));
+                MethodInfo? switchChosenPrefix = AccessTools.Method(typeof(PseudoChordInputPlanFix), nameof(ScrPlanetSwitchChosenPrefix));
+                MethodInfo? switchChosenPostfix = AccessTools.Method(typeof(PseudoChordInputPlanFix), nameof(ScrPlanetSwitchChosenPostfix));
+                if (switchChosen != null && switchChosenPrefix != null && switchChosenPostfix != null)
+                {
+                    Harmony.Patch(switchChosen, prefix: new HarmonyMethod(switchChosenPrefix), postfix: new HarmonyMethod(switchChosenPostfix));
+                    patchedCount++;
+                }
+
+                MethodInfo? errorMeterAddHit = AccessTools.Method(typeof(scrHitErrorMeter), nameof(scrHitErrorMeter.AddHit), new[] { typeof(float), typeof(float) });
+                MethodInfo? errorMeterAddHitPrefix = AccessTools.Method(typeof(PseudoChordInputPlanFix), nameof(ScrHitErrorMeterAddHitPrefix));
+                if (errorMeterAddHit != null && errorMeterAddHitPrefix != null)
+                {
+                    Harmony.Patch(errorMeterAddHit, prefix: new HarmonyMethod(errorMeterAddHitPrefix));
+                    patchedCount++;
+                }
+
+                MethodInfo? mistakesGetHits = AccessTools.Method(typeof(scrMistakesManager), nameof(scrMistakesManager.GetHits), new[] { typeof(HitMargin) });
+                MethodInfo? mistakesGetHitsPrefix = AccessTools.Method(typeof(PseudoChordInputPlanFix), nameof(ScrMistakesManagerGetHitsPrefix));
+                if (mistakesGetHits != null && mistakesGetHitsPrefix != null)
+                {
+                    Harmony.Patch(mistakesGetHits, prefix: new HarmonyMethod(mistakesGetHitsPrefix));
+                    patchedCount++;
+                }
+
+                MethodInfo? controllerGetHits = AccessTools.Method(typeof(scrController), "GetHits", new[] { typeof(HitMargin) });
+                MethodInfo? controllerGetHitsPrefix = AccessTools.Method(typeof(PseudoChordInputPlanFix), nameof(ScrControllerGetHitsPrefix));
+                if (controllerGetHits != null && controllerGetHitsPrefix != null)
+                {
+                    Harmony.Patch(controllerGetHits, prefix: new HarmonyMethod(controllerGetHitsPrefix));
+                    patchedCount++;
+                }
+
+                MethodInfo? onLandOnPortal = AccessTools.Method(typeof(scrController), nameof(scrController.OnLandOnPortal), new[] { typeof(Portal), typeof(string) });
+                MethodInfo? onLandOnPortalPrefix = AccessTools.Method(typeof(PseudoChordInputPlanFix), nameof(ScrControllerOnLandOnPortalPrefix));
+                if (onLandOnPortal != null && onLandOnPortalPrefix != null)
+                {
+                    Harmony.Patch(onLandOnPortal, prefix: new HarmonyMethod(onLandOnPortalPrefix));
+                    patchedCount++;
+                }
+
+                Debug.Log($"[Macro-Inserter] Verification PerfectOverride v64 patched. methods={patchedCount}");
+            }
+            catch (Exception ex)
+            {
+                Debug.Log($"[Macro-Inserter] Verification PerfectOverride v64 patch failed: {ex.GetType().Name}: {ex.Message}");
+            }
+
+            return patchedCount > 0;
+        }
+
+        private sealed class SwitchChosenPerfectOverrideState
+        {
+            public bool Active;
+            public scrFloor? LandingFloor;
+            public bool OldMultipressPenalty;
+            public bool OldMultipressAndHasPressedFirstPress;
+            public int OldKeyLimiterOverCounter;
+        }
+
+        private static bool ScrHitErrorMeterAddHitPrefix(scrHitErrorMeter __instance, ref float angleDiff, ref float marginScale)
+        {
+            if (!ShouldForcePerfectOverride())
+            {
+                return true;
+            }
+
+            // The bottom hit-error meter is fed directly from raw angle error before the normal
+            // HitMargin is overridden. Clear any old non-perfect ticks once, then suppress new
+            // meter ticks entirely while verification PerfectOverride is active. This removes
+            // LPerfect/Late/TooLate remnants and avoids thousands of UI tweens in ultra KPS maps.
+            if (!hitErrorMeterResetForActiveRun && __instance != null)
+            {
+                try
+                {
+                    __instance.Reset();
+                }
+                catch
+                {
+                    // Keep gameplay running even if the UI object is mid-destroy.
+                }
+
+                hitErrorMeterResetForActiveRun = true;
+            }
+
+            angleDiff = 0f;
+            marginScale = 1f;
+            return false;
+        }
+
+        private static bool ScrMistakesManagerGetHitsPrefix(HitMargin hit, ref int __result)
+        {
+            if (!ShouldForcePerfectOverrideForResultUi())
+            {
+                return true;
+            }
+
+            // v64: Do not sanitize the whole hit/floor history from a UI getter.
+            // GetHits can be called several times per frame, and scanning thousands of
+            // hitMargins/floors here makes dense charts crawl. Keep it O(1).
+            __result = GetSanitizedHitCount(hit);
+            return false;
+        }
+
+        private static bool ScrControllerGetHitsPrefix(HitMargin hitMargin, ref int __result)
+        {
+            if (!ShouldForcePerfectOverrideForResultUi())
+            {
+                return true;
+            }
+
+            __result = GetSanitizedHitCount(hitMargin);
+            return false;
+        }
+
+        private static void ScrControllerOnLandOnPortalPrefix()
+        {
+            // v64: This used to call SanitizePerfectOverrideHitData() on every landing.
+            // On 10k+ tile charts that becomes O(n^2) and causes severe lag.
+            // Per-hit conversion is already handled by AddHit/GetHitMargin/ShowHitText,
+            // and the bottom error meter is handled by scrHitErrorMeter.AddHit.
+        }
+
+        private static bool ScrMiscGetHitMarginPrefix(ref HitMargin __result)
+        {
+            if (!ShouldForcePerfectOverride())
+            {
+                return true;
+            }
+
+            __result = HitMargin.Perfect;
+            return false;
+        }
+
+        private static void ScrMistakesManagerAddHitPrefix(ref HitMargin hit)
+        {
+            if (!ShouldForcePerfectOverride())
             {
                 return;
             }
 
-            // v51: queue-only avoids forced Simulated_PlayerControl_Update, but the
-            // game's normal update consumes the queued keyTimes one frame later.
-            // Apply a queue-only lead to scheduling, separate from global offset/
-            // play-correction, so the camera-safe path does not lean late/right.
-            __result = Math.Max(0.0, __result - settings.CameraSafeQueueLeadMs / 1000.0);
+            if (hit != HitMargin.Perfect && hit != HitMargin.Auto)
+            {
+                hit = HitMargin.Perfect;
+            }
+        }
+
+        private static void ScrControllerShowHitTextPrefix(ref HitMargin hitMargin)
+        {
+            if (!ShouldForcePerfectOverride())
+            {
+                return;
+            }
+
+            if (hitMargin != HitMargin.Perfect && hitMargin != HitMargin.Auto)
+            {
+                hitMargin = HitMargin.Perfect;
+            }
+        }
+
+        private static bool ScrControllerOnDamagePrefix(ref bool __result)
+        {
+            if (!ShouldForcePerfectOverride())
+            {
+                return true;
+            }
+
+            __result = false;
+            return false;
+        }
+
+        private static bool ScrControllerFailActionPrefix()
+        {
+            return !ShouldForcePerfectOverride();
+        }
+
+        private static void ScrPlanetSwitchChosenPrefix(scrPlanet __instance, ref SwitchChosenPerfectOverrideState? __state)
+        {
+            __state = null;
+            if (!ShouldForcePerfectOverride() || __instance == null || __instance.controller == null)
+            {
+                return;
+            }
+
+            __state = new SwitchChosenPerfectOverrideState
+            {
+                Active = true,
+                LandingFloor = __instance.currfloor == null ? null : __instance.currfloor.nextfloor,
+                OldMultipressPenalty = __instance.controller.multipressPenalty,
+                OldMultipressAndHasPressedFirstPress = __instance.controller.multipressAndHasPressedFirstPress,
+                OldKeyLimiterOverCounter = __instance.controller.keyLimiterOverCounter,
+            };
+
+            // High-density verification can trip the game's multipress/key-limiter guards even when
+            // the scheduled input stream is intentional. Do not let those guards convert a valid
+            // macro input into OverPress/Fail while the internal verifier is actively running.
+            __instance.controller.multipressPenalty = false;
+            __instance.controller.multipressAndHasPressedFirstPress = false;
+            __instance.controller.keyLimiterOverCounter = 0;
+        }
+
+        private static void ScrPlanetSwitchChosenPostfix(scrPlanet __instance, SwitchChosenPerfectOverrideState? __state)
+        {
+            if (__state == null || !__state.Active || __instance == null || __instance.controller == null)
+            {
+                return;
+            }
+
+            __instance.controller.multipressPenalty = __state.OldMultipressPenalty;
+            __instance.controller.multipressAndHasPressedFirstPress = __state.OldMultipressAndHasPressedFirstPress;
+            __instance.controller.keyLimiterOverCounter = Math.Min(__instance.controller.keyLimiterOverCounter, __state.OldKeyLimiterOverCounter);
+
+            if (__state.LandingFloor != null)
+            {
+                __state.LandingFloor.grade = HitMargin.Perfect;
+            }
+        }
+
+        private static bool ShouldForcePerfectOverride()
+        {
+            InternalMacroService? service = MainServiceField?.GetValue(null) as InternalMacroService;
+            bool active = service != null && service.IsInternalMacroActive;
+            if (active)
+            {
+                perfectOverrideSeenActive = true;
+            }
+
+            return active;
+        }
+
+        private static bool ShouldForcePerfectOverrideForResultUi()
+        {
+            InternalMacroService? service = MainServiceField?.GetValue(null) as InternalMacroService;
+            bool active = service != null && service.IsInternalMacroActive;
+            if (active)
+            {
+                perfectOverrideSeenActive = true;
+            }
+
+            return active || perfectOverrideSeenActive;
+        }
+
+        private static void SanitizePerfectOverrideHitData()
+        {
+            // v64: Kept only as a cheap final cleanup helper. Do not scan floor history here.
+            // The old v62 implementation walked hitMargins and all floors from 0..currentSeqID,
+            // which made dense charts extremely slow when called from UI getters / landing hooks.
+            try
+            {
+                int[] counts = scrMistakesManager.hitMarginsCount;
+                int perfectCount = 0;
+                int autoCount = 0;
+                for (int i = 0; i < counts.Length; i++)
+                {
+                    if (i == (int)HitMargin.Perfect)
+                    {
+                        perfectCount += counts[i];
+                    }
+                    else if (i == (int)HitMargin.Auto)
+                    {
+                        autoCount += counts[i];
+                    }
+                    else
+                    {
+                        perfectCount += counts[i];
+                        counts[i] = 0;
+                    }
+                }
+
+                if ((int)HitMargin.Perfect >= 0 && (int)HitMargin.Perfect < counts.Length)
+                {
+                    counts[(int)HitMargin.Perfect] = perfectCount;
+                }
+
+                if ((int)HitMargin.Auto >= 0 && (int)HitMargin.Auto < counts.Length)
+                {
+                    counts[(int)HitMargin.Auto] = autoCount;
+                }
+            }
+            catch
+            {
+                // Display/stat cleanup only. Never interrupt verification playback.
+            }
+        }
+
+        private static int GetSanitizedHitCount(HitMargin hit)
+        {
+            int[] counts = scrMistakesManager.hitMarginsCount;
+            if (hit == HitMargin.Auto)
+            {
+                return ((int)HitMargin.Auto >= 0 && (int)HitMargin.Auto < counts.Length) ? counts[(int)HitMargin.Auto] : 0;
+            }
+
+            if (hit == HitMargin.Perfect)
+            {
+                int total = 0;
+                for (int i = 0; i < counts.Length; i++)
+                {
+                    if (i == (int)HitMargin.Auto)
+                    {
+                        continue;
+                    }
+
+                    total += counts[i];
+                }
+
+                return total;
+            }
+
+            return 0;
+        }
+
+        private static bool TryPatchUltraDensityVisualSuppressors()
+        {
+            // v60: source-informed ultra-density survival.
+            // Do NOT kill DOTween active tween/sequence registration; that black-screens playback.
+            // Instead:
+            //   1) clamp DOTween.SetTweensCapacity so ADOStartup's 500/50 reset cannot undo our reserve,
+            //   2) transpile known ADOFAI call sites that call Resources.UnloadUnusedAssets(),
+            //      replacing them with a guarded wrapper.
+            bool capacityPatch = TryPatchDOTweenSetTweensCapacity();
+            bool unloadPatch = TryPatchKnownUnloadUnusedAssetsCallSites();
+            TryPreallocateDOTweenCapacity();
+            Debug.Log($"[Macro-Inserter] Ultra-density v60 patches: dotweenCapacityPatch={capacityPatch} unloadCallsitePatch={unloadPatch} dotweenKillPatch=False");
+            return capacityPatch || unloadPatch;
+        }
+
+        private static bool TryPatchDOTweenSetTweensCapacity()
+        {
+            try
+            {
+                MethodInfo? prefix = AccessTools.Method(typeof(PseudoChordInputPlanFix), nameof(DOTweenSetTweensCapacityPrefix));
+                if (prefix == null)
+                {
+                    return false;
+                }
+
+                foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    Type? dotweenType = assembly.GetType("DG.Tweening.DOTween");
+                    if (dotweenType == null)
+                    {
+                        continue;
+                    }
+
+                    MethodInfo? setTweensCapacity = AccessTools.Method(dotweenType, "SetTweensCapacity", new[] { typeof(int), typeof(int) });
+                    if (setTweensCapacity == null)
+                    {
+                        continue;
+                    }
+
+                    Harmony.Patch(setTweensCapacity, prefix: new HarmonyMethod(prefix));
+                    Debug.Log("[Macro-Inserter] DOTween.SetTweensCapacity clamp patch applied for ultra-density macro.");
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.Log($"[Macro-Inserter] DOTween.SetTweensCapacity clamp patch failed: {ex.GetType().Name}: {ex.Message}");
+            }
+
+            return false;
+        }
+
+        private static bool TryPatchKnownUnloadUnusedAssetsCallSites()
+        {
+            try
+            {
+                MethodInfo? transpiler = AccessTools.Method(typeof(PseudoChordInputPlanFix), nameof(UnloadUnusedAssetsCallSiteTranspiler));
+                if (transpiler == null)
+                {
+                    return false;
+                }
+
+                int patchedCount = 0;
+                patchedCount += PatchMethodsByName("scnGame", "Awake", transpiler);
+                patchedCount += PatchMethodsByName("scnGame", "LoadLevel", transpiler);
+                patchedCount += PatchMethodsByName("scnEditor", "SwitchToEditMode", transpiler);
+
+                if (patchedCount > 0)
+                {
+                    Debug.Log($"[Macro-Inserter] Resources.UnloadUnusedAssets call-site guard patched. methods={patchedCount}");
+                    return true;
+                }
+
+                Debug.Log("[Macro-Inserter] Resources.UnloadUnusedAssets call-site guard found no target methods.");
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Debug.Log($"[Macro-Inserter] Resources.UnloadUnusedAssets call-site guard patch failed: {ex.GetType().Name}: {ex.Message}");
+                return false;
+            }
+        }
+
+        private static int PatchMethodsByName(string typeName, string methodName, MethodInfo transpiler)
+        {
+            Type? type = AccessTools.TypeByName(typeName);
+            if (type == null)
+            {
+                return 0;
+            }
+
+            int count = 0;
+            foreach (MethodInfo method in AccessTools.GetDeclaredMethods(type))
+            {
+                if (method.Name != methodName)
+                {
+                    continue;
+                }
+
+                Harmony.Patch(method, transpiler: new HarmonyMethod(transpiler));
+                count++;
+            }
+
+            return count;
+        }
+
+        private static IEnumerable<CodeInstruction> UnloadUnusedAssetsCallSiteTranspiler(IEnumerable<CodeInstruction> instructions)
+        {
+            MethodInfo? original = AccessTools.Method(typeof(Resources), nameof(Resources.UnloadUnusedAssets), Type.EmptyTypes);
+            MethodInfo? replacement = AccessTools.Method(typeof(PseudoChordInputPlanFix), nameof(GuardedUnloadUnusedAssets));
+            foreach (CodeInstruction instruction in instructions)
+            {
+                if (original != null && replacement != null && instruction.Calls(original))
+                {
+                    yield return new CodeInstruction(OpCodes.Call, replacement);
+                }
+                else
+                {
+                    yield return instruction;
+                }
+            }
+        }
+
+        private static AsyncOperation? GuardedUnloadUnusedAssets()
+        {
+            try
+            {
+                if (ShouldSuppressUnloadUnusedAssets())
+                {
+                    return null;
+                }
+            }
+            catch
+            {
+                // Fall through to the game call.
+            }
+
+            return Resources.UnloadUnusedAssets();
+        }
+
+        private static void DOTweenSetTweensCapacityPrefix(
+            [HarmonyArgument(0)] ref int tweenersCapacity,
+            [HarmonyArgument(1)] ref int sequencesCapacity)
+        {
+            try
+            {
+                if (!ShouldForceHighDOTweenCapacity())
+                {
+                    return;
+                }
+
+                if (tweenersCapacity < 200000)
+                {
+                    tweenersCapacity = 200000;
+                }
+
+                if (sequencesCapacity < 20000)
+                {
+                    sequencesCapacity = 20000;
+                }
+            }
+            catch
+            {
+                // Keep DOTween usable if anything goes wrong.
+            }
+        }
+
+        private static int TryPatchDOTweenActiveTweenMethods()
+        {
+            int patchedCount = 0;
+            MethodInfo? dotweenPrefix = AccessTools.Method(typeof(PseudoChordInputPlanFix), nameof(DOTweenAddActiveTweenPrefix));
+            if (dotweenPrefix == null)
+            {
+                return 0;
+            }
+
+            foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                Type? tweenManagerType = assembly.GetType("DG.Tweening.Core.TweenManager")
+                    ?? assembly.GetType("DG.Tweening.TweenManager");
+                if (tweenManagerType == null)
+                {
+                    continue;
+                }
+
+                foreach (MethodInfo method in tweenManagerType.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static))
+                {
+                    string name = method.Name;
+                    if (name != "AddActiveTween" && name != "AddActiveSequence")
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        Harmony.Patch(method, prefix: new HarmonyMethod(dotweenPrefix));
+                        patchedCount++;
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.Log($"[Macro-Inserter] DOTween visual suppressor patch skipped: {method.DeclaringType?.FullName}.{method.Name}: {ex.GetType().Name}: {ex.Message}");
+                    }
+                }
+            }
+
+            if (patchedCount > 0)
+            {
+                Debug.Log($"[Macro-Inserter] DOTween visual suppressor patched. methods={patchedCount}");
+            }
+            else
+            {
+                Debug.Log("[Macro-Inserter] DOTween visual suppressor found no patchable TweenManager methods.");
+            }
+
+            return patchedCount;
+        }
+
+        private static void TryPreallocateDOTweenCapacity()
+        {
+            try
+            {
+                foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    Type? dotweenType = assembly.GetType("DG.Tweening.DOTween");
+                    if (dotweenType == null)
+                    {
+                        continue;
+                    }
+
+                    MethodInfo? setTweensCapacity = AccessTools.Method(dotweenType, "SetTweensCapacity", new[] { typeof(int), typeof(int) });
+                    if (setTweensCapacity == null)
+                    {
+                        continue;
+                    }
+
+                    // Avoid repeated 1250 -> 3125 -> 7812 -> ... automatic reallocations.
+                    // This does not create tweens; it only reserves the arrays once.
+                    setTweensCapacity.Invoke(null, new object[] { 200000, 20000 });
+                    Debug.Log("[Macro-Inserter] DOTween capacity preallocated for ultra-density macro. tweens=200000 sequences=20000");
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.Log($"[Macro-Inserter] DOTween capacity preallocation skipped: {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+
+        private static bool ResourcesUnloadUnusedAssetsPrefix(ref AsyncOperation __result)
+        {
+            // Kept only so older compiled references/settings remain harmless.
+            // This method is intentionally no longer patched in v57.
+            return true;
+        }
+
+        private static bool DOTweenAddActiveTweenPrefix()
+        {
+            try
+            {
+                return !ShouldSuppressVisualTweens();
+            }
+            catch
+            {
+                return true;
+            }
+        }
+
+        private static bool ShouldSuppressVisualTweens()
+        {
+            // v60: DOTween suppression is intentionally disabled. Keeping the method as a no-op
+            // preserves compatibility with older helper code/settings while avoiding black-screen
+            // playback and "You can't add elements to an inactive/killed Sequence" spam.
+            return false;
+        }
+
+        private static bool ShouldForceHighDOTweenCapacity()
+        {
+            if (!TryGetInternalMacroSettings(out InternalMacroService? service, out InternalMacroSettings? settings))
+            {
+                return false;
+            }
+
+            // Reuse the old visual-tween setting as the high-capacity switch.
+            // It no longer suppresses/kills DOTween; it only prevents repeated DOTween array growth.
+            if (!settings.SuppressVisualTweensWhileInternalMacroRuns)
+            {
+                return false;
+            }
+
+            return settings.EnableInternalMacro || service.IsInternalMacroActive;
+        }
+
+        private static bool ShouldSuppressUnloadUnusedAssets()
+        {
+            if (!TryGetInternalMacroSettings(out InternalMacroService? service, out InternalMacroSettings? settings))
+            {
+                return false;
+            }
+
+            if (!settings.SuppressUnloadUnusedAssetsWhileInternalMacroRuns)
+            {
+                return false;
+            }
+
+            return settings.EnableInternalMacro || service.IsInternalMacroActive;
+        }
+
+        private static bool TryGetInternalMacroSettings(out InternalMacroService? service, out InternalMacroSettings? settings)
+        {
+            service = MainServiceField?.GetValue(null) as InternalMacroService;
+            settings = service == null ? null : SettingsField?.GetValue(service) as InternalMacroSettings;
+            return service != null && settings != null;
+        }
+
+        private static bool TryPatchOneShotAudio()
+        {
+            try
+            {
+                int patchedCount = 0;
+
+                PatchAudioMethod(typeof(AudioSource), nameof(AudioSource.PlayOneShot), new[] { typeof(AudioClip) }, nameof(AudioSourcePlayOneShotPrefix), ref patchedCount);
+                PatchAudioMethod(typeof(AudioSource), nameof(AudioSource.PlayOneShot), new[] { typeof(AudioClip), typeof(float) }, nameof(AudioSourcePlayOneShotVolumePrefix), ref patchedCount);
+
+                // Some ADOFAI/renderer paths set a short clip on an AudioSource and call Play()/PlayDelayed()/PlayScheduled()
+                // rather than PlayOneShot(). 4000+ KPS can exhaust Unity's virtual audio channels through those paths even
+                // when MacroKeyViewer is disabled, so suppress short clip playback while the internal verification macro runs.
+                PatchAudioMethod(typeof(AudioSource), nameof(AudioSource.Play), Type.EmptyTypes, nameof(AudioSourcePlayPrefix), ref patchedCount);
+                PatchAudioMethod(typeof(AudioSource), nameof(AudioSource.Play), new[] { typeof(ulong) }, nameof(AudioSourcePlayDelayPrefix), ref patchedCount);
+                PatchAudioMethod(typeof(AudioSource), nameof(AudioSource.PlayDelayed), new[] { typeof(float) }, nameof(AudioSourcePlayDelayedPrefix), ref patchedCount);
+                PatchAudioMethod(typeof(AudioSource), nameof(AudioSource.PlayScheduled), new[] { typeof(double) }, nameof(AudioSourcePlayScheduledPrefix), ref patchedCount);
+
+                // Also catch temporary AudioSource creation helpers.
+                PatchAudioMethod(typeof(AudioSource), nameof(AudioSource.PlayClipAtPoint), new[] { typeof(AudioClip), typeof(Vector3) }, nameof(AudioSourcePlayClipAtPointPrefix), ref patchedCount);
+                PatchAudioMethod(typeof(AudioSource), nameof(AudioSource.PlayClipAtPoint), new[] { typeof(AudioClip), typeof(Vector3), typeof(float) }, nameof(AudioSourcePlayClipAtPointVolumePrefix), ref patchedCount);
+
+                return patchedCount > 0;
+            }
+            catch (Exception ex)
+            {
+                Debug.Log($"[Macro-Inserter] Short audio suppression patch failed: {ex.GetType().Name}: {ex.Message}");
+                return false;
+            }
+        }
+
+        private static void PatchAudioMethod(Type type, string methodName, Type[] parameterTypes, string prefixName, ref int patchedCount)
+        {
+            MethodInfo? original = AccessTools.Method(type, methodName, parameterTypes);
+            MethodInfo? prefix = AccessTools.Method(typeof(PseudoChordInputPlanFix), prefixName);
+            if (original == null || prefix == null)
+            {
+                return;
+            }
+
+            Harmony.Patch(original, prefix: new HarmonyMethod(prefix));
+            patchedCount++;
+        }
+
+        private static bool AudioSourcePlayOneShotPrefix(AudioClip clip)
+        {
+            return ShouldAllowOneShotAudio(clip);
+        }
+
+        private static bool AudioSourcePlayOneShotVolumePrefix(AudioClip clip, float volumeScale)
+        {
+            return ShouldAllowOneShotAudio(clip);
+        }
+
+        private static bool AudioSourcePlayPrefix(AudioSource __instance)
+        {
+            return ShouldAllowShortSourceAudio(__instance);
+        }
+
+        private static bool AudioSourcePlayDelayPrefix(AudioSource __instance, ulong delay)
+        {
+            return ShouldAllowShortSourceAudio(__instance);
+        }
+
+        private static bool AudioSourcePlayDelayedPrefix(AudioSource __instance, float delay)
+        {
+            return ShouldAllowShortSourceAudio(__instance);
+        }
+
+        private static bool AudioSourcePlayScheduledPrefix(AudioSource __instance, double time)
+        {
+            return ShouldAllowShortSourceAudio(__instance);
+        }
+
+        private static bool AudioSourcePlayClipAtPointPrefix(AudioClip clip, Vector3 position)
+        {
+            return ShouldAllowShortClipAudio(clip);
+        }
+
+        private static bool AudioSourcePlayClipAtPointVolumePrefix(AudioClip clip, Vector3 position, float volume)
+        {
+            return ShouldAllowShortClipAudio(clip);
+        }
+
+        private static bool ShouldAllowOneShotAudio(AudioClip clip)
+        {
+            try
+            {
+                if (!ShouldSuppressShortAudio(out _))
+                {
+                    return true;
+                }
+
+                // PlayOneShot is used for hit/UI one-shots; during verification playback it can be called thousands
+                // of times per second. Block it wholesale while the internal macro is active.
+                return false;
+            }
+            catch
+            {
+                return true;
+            }
+        }
+
+        private static bool ShouldAllowShortSourceAudio(AudioSource source)
+        {
+            try
+            {
+                if (source == null || source.clip == null)
+                {
+                    return true;
+                }
+
+                if (!ShouldSuppressShortAudio(out float maxClipSeconds))
+                {
+                    return true;
+                }
+
+                AudioClip clip = source.clip;
+                if (clip.length <= maxClipSeconds)
+                {
+                    return false;
+                }
+
+                return true;
+            }
+            catch
+            {
+                return true;
+            }
+        }
+
+        private static bool ShouldAllowShortClipAudio(AudioClip clip)
+        {
+            try
+            {
+                if (clip == null)
+                {
+                    return true;
+                }
+
+                if (!ShouldSuppressShortAudio(out float maxClipSeconds))
+                {
+                    return true;
+                }
+
+                return clip.length > maxClipSeconds;
+            }
+            catch
+            {
+                return true;
+            }
+        }
+
+        private static bool ShouldSuppressShortAudio(out float maxClipSeconds)
+        {
+            maxClipSeconds = 2.0f;
+
+            InternalMacroService? service = MainServiceField?.GetValue(null) as InternalMacroService;
+            if (service == null || !service.IsInternalMacroActive)
+            {
+                return false;
+            }
+
+            InternalMacroSettings? settings = SettingsField?.GetValue(service) as InternalMacroSettings;
+            if (settings == null || !settings.SuppressOneShotAudioWhileInternalMacroRuns)
+            {
+                return false;
+            }
+
+            maxClipSeconds = Math.Max(0.01f, settings.SuppressShortAudioMaxClipSeconds);
+            return true;
         }
 
         private static bool BuildInputPlanPrefix(
@@ -313,27 +1134,23 @@ namespace Macro_Inserter
                     LogMinimal(log, "Runtime input-pipeline plan active; forcing EnableHighDensityMode=True so DirectKeyTimes can keep up with dense input sections.");
                 }
 
-                if (settings.EnableCameraSafeMode)
-                {
-                    int cameraSafeCap = settings.CameraSafeStrictMode
-                        ? 1
-                        : Math.Max(1, settings.CameraSafeMaxHitsPerPlayerControlUpdate);
-                    if (settings.MaxHitsPerPlayerControlUpdate > cameraSafeCap)
-                    {
-                        int previousMaxHits = settings.MaxHitsPerPlayerControlUpdate;
-                        settings.MaxHitsPerPlayerControlUpdate = cameraSafeCap;
-                        LogMinimal(log, $"Runtime input-pipeline plan active; camera-safe clamp MaxHitsPerPlayerControlUpdate from {previousMaxHits} to {cameraSafeCap}.");
-                    }
-                    else if (settings.MaxHitsPerPlayerControlUpdate < 1)
-                    {
-                        settings.MaxHitsPerPlayerControlUpdate = cameraSafeCap;
-                    }
-                }
-                else if (settings.MaxHitsPerPlayerControlUpdate < 5000)
+                if (settings.MaxHitsPerPlayerControlUpdate < 5000)
                 {
                     int previousMaxHits = settings.MaxHitsPerPlayerControlUpdate;
                     settings.MaxHitsPerPlayerControlUpdate = 5000;
-                    LogMinimal(log, $"Runtime input-pipeline plan active; raising MaxHitsPerPlayerControlUpdate from {previousMaxHits} to 5000 for dense directKeyTimes sections. EnableCameraSafeMode is OFF.");
+                    LogMinimal(log, $"Runtime input-pipeline plan active; raising MaxHitsPerPlayerControlUpdate from {previousMaxHits} to 5000 for dense directKeyTimes sections.");
+                }
+
+                // v63/v64: PerfectOverride verification can intentionally survive very large Unity stalls.
+                // The previous v62 threshold only raised MaxLateRetryMs for >=30000 input entries,
+                // so ~28k-entry maps could still hit tooLateSkipped after a single 250ms+ frame stall
+                // and then appear to freeze with KPS=0. Raise the retry window for dense verification
+                // plans so the scheduler drains the backlog instead of abandoning the stream.
+                if (runtimeInputPlan.Count >= 10000 && settings.MaxLateRetryMs < 60000.0)
+                {
+                    double previousMaxLateRetryMs = settings.MaxLateRetryMs;
+                    settings.MaxLateRetryMs = 60000.0;
+                    LogMinimal(log, $"Runtime input-pipeline plan active; raising MaxLateRetryMs from {previousMaxLateRetryMs:F3}ms to 60000.000ms for dense PerfectOverride verification sections.");
                 }
 
                 __result = runtimeInputPlan;
@@ -362,10 +1179,6 @@ namespace Macro_Inserter
             Action<string>? log = LogField?.GetValue(__instance) as Action<string>;
             InternalMacroSettings? settings = SettingsField?.GetValue(__instance) as InternalMacroSettings;
             int keyCount = Math.Max(1, entry.EmittedHitCount);
-            bool cameraSafeQueueOnly = settings != null &&
-                                       settings.EnableCameraSafeMode &&
-                                       settings.CameraSafeQueueOnlyMode;
-
             DirectKeyTimesTrace trace = new();
             trace.KeyViewerEnabled = settings != null && settings.EnableMacroKeyViewer;
             trace.RainEnabled = settings != null && settings.EnableMacroKeyViewer && settings.EnableKeyViewerRain;
@@ -385,7 +1198,6 @@ namespace Macro_Inserter
             // synthetic hit window is open.
             //
             // v47 keeps gameplay input untouched and moves directKeyTimes diagnostics off the hot logging path.
-            // v50 camera-safe queue-only mode avoids forced Simulated_PlayerControl_Update.
             // Per-hit diagnostics are stored as numeric samples and dumped only when the scheduler stops.
             bool plainSingle =
                 keyCount == 1 &&
@@ -393,8 +1205,7 @@ namespace Macro_Inserter
                 !entry.ContainsMidspin &&
                 !entry.IsCompressed;
 
-            if (!cameraSafeQueueOnly &&
-                TryBuildDueBurst(
+            if (TryBuildDueBurst(
                     __instance,
                     dueCount,
                     out int burstEntryCount,
@@ -438,7 +1249,7 @@ namespace Macro_Inserter
             int afterFloor = DirectKeyTimesInputInjector.Inject(
                 controller,
                 keyCount,
-                forceSimulation: asyncInputActive && !cameraSafeQueueOnly,
+                forceSimulation: asyncInputActive,
                 allowDirectHitFallback: false,
                 log);
             trace.AddDirectCall(directMarker);
@@ -460,31 +1271,6 @@ namespace Macro_Inserter
                 trace.Finish();
                 LogDirectKeyTimesSpikeIfNeeded(__instance, log, "directKeyTimes", prefixStartRealtime, prefixStartMemory, keyCount, keyCount, dueCount, currentFloorBefore, afterFloor, entry.FirstSeqId, entry.LastSeqId, entry.FirstTargetTimeSeconds, clockSeconds, asyncInputActive, trace);
                 __result = true;
-                return false;
-            }
-
-            if (cameraSafeQueueOnly)
-            {
-                if (settings != null && settings.CameraSafePulseKeyViewerOnQueue && lastQueueOnlyKeyViewerPulseSeqId != entry.FirstSeqId)
-                {
-                    double keyViewerMarker = trace.Begin();
-                    trace.KeyViewerPulseCount += PulseMacroKeyViewer(__instance, entry, keyCount);
-                    trace.AddKeyViewerNotify(keyViewerMarker);
-                    lastQueueOnlyKeyViewerPulseSeqId = entry.FirstSeqId;
-                }
-
-                // v52: in queue-only mode the floor usually advances in the game's
-                // next normal update, so the reachedTarget branch is skipped. Still
-                // update the lightweight summary counters so the MacroKeyViewer
-                // pulse budget resets periodically instead of dying after 64 pulses.
-                double queueSummaryMarker = trace.Begin();
-                RecordDirectKeyTimesSummary(log, keyCount, currentFloorBefore, afterFloor, asyncInputActive);
-                trace.AddSummary(queueSummaryMarker);
-
-                currentFloorAfter = currentFloorBefore;
-                trace.Finish();
-                LogDirectKeyTimesSpikeIfNeeded(__instance, log, "queuedWait", prefixStartRealtime, prefixStartMemory, keyCount, keyCount, dueCount, currentFloorBefore, afterFloor, entry.FirstSeqId, entry.LastSeqId, entry.FirstTargetTimeSeconds, clockSeconds, asyncInputActive, trace);
-                __result = false;
                 return false;
             }
 
@@ -642,24 +1428,63 @@ namespace Macro_Inserter
                 return 0;
             }
 
-            // v36: the game input path still only queues keyTimes. Natural fingering is
-            // a MacroKeyViewer layer: pulse the beat-bank assigned key names instead of
-            // the old round-robin counter. Keep v29's UI load cap so dense sections do
-            // not destabilize playback.
-            if (keyCount >= 128)
-            {
-                return 0;
-            }
-
-            const int maxPulsesPerSummaryWindow = 64;
-            if (macroKeyViewerPulsesSinceSummary >= maxPulsesPerSummaryWindow)
-            {
-                return 0;
-            }
-
+            // v54: 4000+ KPS cannot be represented as one managed Pulse() call per hit.
+            // Preserve all counts/KPS, but coalesce dense pulses into per-key counter bumps.
+            // This is not a stop/throttle: every hit still contributes to counters and pressed state.
             double durationSeconds = Math.Max(0, settings.MacroKeyViewerPulseMs) / 1000.0;
-            int remainingPulseBudget = maxPulsesPerSummaryWindow - macroKeyViewerPulsesSinceSummary;
-            int pulseCount = Math.Min(Math.Min(keyCount, 32), remainingPulseBudget);
+            int pulseCount = Math.Max(1, keyCount);
+            int maxCalls = Math.Max(1, settings.MacroKeyViewerMaxPulseCallsPerEntry);
+            bool coalesce = settings.EnableMacroKeyViewerPulseCoalescing || pulseCount > maxCalls;
+
+            if (coalesce)
+            {
+                List<string> keyCycle = new();
+                if (entry.AssignedKeyNames.Count > 0)
+                {
+                    keyCycle.AddRange(entry.AssignedKeyNames.Where(name => !string.IsNullOrWhiteSpace(name)));
+                }
+                else if (configuredKeys.Count > 0)
+                {
+                    int take = Math.Min(configuredKeys.Count, Math.Max(1, maxCalls));
+                    for (int i = 0; i < take; i++)
+                    {
+                        int keyIndex = (int)((macroKeyViewerFallbackCounter + i) % configuredKeys.Count);
+                        keyCycle.Add(configuredKeys[keyIndex]);
+                    }
+                    macroKeyViewerFallbackCounter += pulseCount;
+                }
+
+                if (keyCycle.Count == 0)
+                {
+                    return 0;
+                }
+
+                Dictionary<string, int> counts = new(StringComparer.Ordinal);
+                for (int i = 0; i < pulseCount; i++)
+                {
+                    string keyName = keyCycle[i % keyCycle.Count];
+                    counts.TryGetValue(keyName, out int oldCount);
+                    counts[keyName] = oldCount + 1;
+                }
+
+                int represented = 0;
+                foreach (KeyValuePair<string, int> pair in counts)
+                {
+                    try
+                    {
+                        service.MacroKeyViewer.Pulse(pair.Key, durationSeconds, pair.Value);
+                        represented += pair.Value;
+                    }
+                    catch
+                    {
+                        break;
+                    }
+                }
+
+                macroKeyViewerPulsesSinceSummary += represented;
+                return represented;
+            }
+
             int pulsed = 0;
             for (int i = 0; i < pulseCount; i++)
             {
@@ -704,10 +1529,8 @@ namespace Macro_Inserter
                 directKeyTimesFloorAdvanceSinceSummary += afterFloor - beforeFloor;
             }
 
-            // v47/v52: keep the 0.5s accounting window because MacroKeyViewer
-            // pulse throttling depends on it, but do not emit a string from the input
-            // hot path. v52 also lets PulseMacroKeyViewer reset this window directly
-            // so camera-safe queue-only mode cannot run out of pulse budget forever.
+            // v47/v53: keep the 0.5s accounting window for deferred numeric
+            // diagnostics, but do not emit a string from the input hot path.
             ResetMacroKeyViewerPulseBudgetIfWindowElapsed();
         }
 
@@ -882,8 +1705,9 @@ namespace Macro_Inserter
             directKeyTimesFloorAdvanceSinceSummary = 0;
             macroKeyViewerPulsesSinceSummary = 0;
             lastDirectKeyTimesSummaryRealtime = 0.0;
+            perfectOverrideSeenActive = false;
+            hitErrorMeterResetForActiveRun = false;
             ResetStuckPlainSingle(-1);
-            lastQueueOnlyKeyViewerPulseSeqId = -1;
         }
 
         internal static void DumpRecentDirectKeyTimes(Action<string>? log, string stopReason, InternalMacroSettings? settings)
