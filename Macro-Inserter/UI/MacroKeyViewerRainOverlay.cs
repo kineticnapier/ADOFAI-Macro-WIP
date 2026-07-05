@@ -23,7 +23,13 @@ internal static class MacroKeyViewerRainOverlay
         }
 
         installLogged = true;
-        Debug.Log("[Macro-Inserter] MacroKeyViewer rain overlay v44 ready. UMM OnGUI is untouched.");
+        Debug.Log("[Macro-Inserter] MacroKeyViewer rain overlay v46 ready. UMM OnGUI is untouched.");
+    }
+
+
+    public static void Clear()
+    {
+        KeyStates.Clear();
     }
 
     public static void Draw(
@@ -46,8 +52,13 @@ internal static class MacroKeyViewerRainOverlay
         IReadOnlyList<MacroKeyViewerKeySnapshot> snapshots,
         IReadOnlyList<Rect> keyRects)
     {
-        if (!settings.EnableKeyViewerRain ||
-            snapshots.Count == 0 ||
+        if (!settings.EnableKeyViewerRain)
+        {
+            Clear();
+            return;
+        }
+
+        if (snapshots.Count == 0 ||
             keyRects.Count == 0 ||
             Event.current.type != EventType.Repaint)
         {

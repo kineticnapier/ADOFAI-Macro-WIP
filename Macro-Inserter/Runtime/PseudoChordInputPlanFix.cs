@@ -18,7 +18,7 @@ namespace Macro_Inserter
 {
     internal static class PseudoChordInputPlanFix
     {
-        private static readonly Harmony Harmony = new Harmony("Macro-Inserter.PseudoChordInputPlanFix.v43");
+        private static readonly Harmony Harmony = new Harmony("Macro-Inserter.PseudoChordInputPlanFix.v47");
         private static readonly FieldInfo? SettingsField = AccessTools.Field(typeof(InternalMacroService), "settings");
         private static readonly FieldInfo? LogField = AccessTools.Field(typeof(InternalMacroService), "log");
         private static readonly FieldInfo? InputPlanField = AccessTools.Field(typeof(InternalMacroService), "inputPlan");
@@ -29,6 +29,8 @@ namespace Macro_Inserter
         private const int MaxBurstEntries = 4096;
         private const int MaxBurstKeys = 4096;
 
+        private const int DeferredTraceCapacity = 64;
+
         private static int directKeyTimesEntriesSinceSummary;
         private static int directKeyTimesKeysSinceSummary;
         private static int directKeyTimesFloorAdvanceSinceSummary;
@@ -37,8 +39,136 @@ namespace Macro_Inserter
         private static double lastDirectKeyTimesSummaryRealtime;
         private static int stuckPlainSingleSeqId = -1;
         private static int stuckPlainSingleAttemptCount;
-        private static double lastDirectKeyTimesSpikeLogRealtime = -10.0;
-        private static int directKeyTimesSpikeLogSuppressed;
+        private static readonly DeferredDirectKeyTimesTrace[] DeferredTraceRing = new DeferredDirectKeyTimesTrace[DeferredTraceCapacity];
+        private static int deferredTraceWriteIndex;
+        private static int deferredTraceCount;
+        private static int deferredTraceTotalCount;
+        private static int deferredLateSpikeCount;
+        private static int deferredProcessingSpikeCount;
+        private static int deferredQueuedNoAdvanceCount;
+        private static int deferredMaxDueCount;
+        private static double deferredMaxLateMs;
+        private static double deferredMaxProcessingMs;
+        private static double deferredMaxDeltaMs;
+        private static int deferredMaxAfterFloor;
+
+        private struct DirectKeyTimesTrace
+        {
+            private readonly double startRealtime;
+
+            public DirectKeyTimesTrace()
+            {
+                startRealtime = Time.realtimeSinceStartupAsDouble;
+                StartFrame = Time.frameCount;
+                StartDeltaTimeMs = Time.deltaTime * 1000.0f;
+                StartUnscaledDeltaTimeMs = Time.unscaledDeltaTime * 1000.0f;
+            }
+
+            public int StartFrame { get; }
+            public int EndFrame { get; private set; }
+            public float StartDeltaTimeMs { get; }
+            public float StartUnscaledDeltaTimeMs { get; }
+            public float EndDeltaTimeMs { get; private set; }
+            public float EndUnscaledDeltaTimeMs { get; private set; }
+            public double SetupMs { get; private set; }
+            public double DirectCallMs { get; private set; }
+            public double FloorCheckMs { get; private set; }
+            public double KeyViewerNotifyMs { get; private set; }
+            public double SummaryMs { get; private set; }
+            public double SpikeBookkeepingMs { get; private set; }
+            public int KeyViewerPulseCount { get; set; }
+            public bool KeyViewerEnabled { get; set; }
+            public bool RainEnabled { get; set; }
+
+            public void MarkSetupDone()
+            {
+                SetupMs = ElapsedMs();
+            }
+
+            public double Begin()
+            {
+                return Time.realtimeSinceStartupAsDouble;
+            }
+
+            public void AddDirectCall(double marker)
+            {
+                DirectCallMs += Since(marker);
+            }
+
+            public void AddFloorCheck(double marker)
+            {
+                FloorCheckMs += Since(marker);
+            }
+
+            public void AddKeyViewerNotify(double marker)
+            {
+                KeyViewerNotifyMs += Since(marker);
+            }
+
+            public void AddSummary(double marker)
+            {
+                SummaryMs += Since(marker);
+            }
+
+            public void AddSpikeBookkeeping(double marker)
+            {
+                SpikeBookkeepingMs += Since(marker);
+            }
+
+            public double TotalMs => ElapsedMs();
+
+            public void Finish()
+            {
+                EndFrame = Time.frameCount;
+                EndDeltaTimeMs = Time.deltaTime * 1000.0f;
+                EndUnscaledDeltaTimeMs = Time.unscaledDeltaTime * 1000.0f;
+            }
+
+            private double ElapsedMs()
+            {
+                return (Time.realtimeSinceStartupAsDouble - startRealtime) * 1000.0;
+            }
+
+            private static double Since(double marker)
+            {
+                return (Time.realtimeSinceStartupAsDouble - marker) * 1000.0;
+            }
+        }
+
+        private sealed class DeferredDirectKeyTimesTrace
+        {
+            public string Operation { get; set; } = string.Empty;
+            public string Reason { get; set; } = string.Empty;
+            public double ClockSeconds { get; set; }
+            public double TargetTimeSeconds { get; set; }
+            public double LateMs { get; set; }
+            public double ProcessingMs { get; set; }
+            public int EntryKeyCount { get; set; }
+            public int ProcessedKeyCount { get; set; }
+            public int DueCount { get; set; }
+            public int BeforeFloor { get; set; }
+            public int AfterFloor { get; set; }
+            public int FirstSeqId { get; set; }
+            public int LastSeqId { get; set; }
+            public bool AsyncInputActive { get; set; }
+            public int StartFrame { get; set; }
+            public int EndFrame { get; set; }
+            public float StartDeltaTimeMs { get; set; }
+            public float EndDeltaTimeMs { get; set; }
+            public float StartUnscaledDeltaTimeMs { get; set; }
+            public float EndUnscaledDeltaTimeMs { get; set; }
+            public double SetupMs { get; set; }
+            public double DirectCallMs { get; set; }
+            public double FloorCheckMs { get; set; }
+            public double KeyViewerNotifyMs { get; set; }
+            public double SummaryMs { get; set; }
+            public double TotalMs { get; set; }
+            public bool KeyViewerEnabled { get; set; }
+            public bool RainEnabled { get; set; }
+            public int KeyViewerPulseCount { get; set; }
+            public int MacroKeyViewerPulsesWindow { get; set; }
+            public double MemoryDeltaKb { get; set; }
+        }
 
         private static bool patched;
         private static bool patchAttempted;
@@ -102,11 +232,11 @@ namespace Macro_Inserter
                 }
 
                 patched = buildPatched && firePatched;
-                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v43 installed by {reason}. buildPatched={buildPatched} firePatched={firePatched} rainOverlay=True uiPatchDisabled=True loadPatchDisabled=True logPatchDisabled=True");
+                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v47 installed by {reason}. buildPatched={buildPatched} firePatched={firePatched} rainOverlay=True uiPatchDisabled=True loadPatchDisabled=True logPatchDisabled=True");
             }
             catch (Exception ex)
             {
-                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v43 install failed: {ex}");
+                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v47 install failed: {ex}");
             }
         }
 
@@ -122,7 +252,8 @@ namespace Macro_Inserter
                 return true;
             }
 
-            if (ChartFileInputPlanBuilder.TryBuild(settings, log, macroPlan, out IReadOnlyList<InputPlanEntry> runtimeInputPlan))
+            Action<string> buildLog = settings.LoggingMode == LoggingMode.None ? _ => { } : log;
+            if (ChartFileInputPlanBuilder.TryBuild(settings, buildLog, macroPlan, out IReadOnlyList<InputPlanEntry> runtimeInputPlan))
             {
                 // The runtime input-pipeline plan is executed through the original
                 // DirectHit branch because that is the only branch that calls
@@ -178,12 +309,17 @@ namespace Macro_Inserter
             }
 
             Action<string>? log = LogField?.GetValue(__instance) as Action<string>;
+            InternalMacroSettings? settings = SettingsField?.GetValue(__instance) as InternalMacroSettings;
             int keyCount = Math.Max(1, entry.EmittedHitCount);
 
+            DirectKeyTimesTrace trace = new();
+            trace.KeyViewerEnabled = settings != null && settings.EnableMacroKeyViewer;
+            trace.RainEnabled = settings != null && settings.EnableMacroKeyViewer && settings.EnableKeyViewerRain;
             object? controller = ReflectionCache.GetSingletonInstance("scrController");
             bool asyncInputActive = ReflectionCache.TryReadBool("AsyncInputManager", out bool active, "isActive") && active;
             double prefixStartRealtime = Time.realtimeSinceStartupAsDouble;
             long prefixStartMemory = Profiler.GetTotalAllocatedMemoryLong();
+            trace.MarkSetupDone();
 
             // v17 proved that faking ValidInputWasTriggered/CountValidKeysPressed is
             // unstable here: the synthetic hit window can be consumed by unrelated Up
@@ -194,19 +330,8 @@ namespace Macro_Inserter
             // HitInputEvent(false, Down) is still accepted by InputPatches while the
             // synthetic hit window is open.
             //
-            // v21 tried to use Hit(false) directly for every plain single. The logs
-            // showed that it advanced currentFloor, but the game could still die
-            // around 180-degree turns because this bypasses too much of the normal
-            // keyTimes/update path. v24 keeps directKeyTimes as the primary path for
-            // every entry, and only uses DirectHit as a delayed emergency retry for a
-            // plain single that is already stuck. v25 adds a burst drain path for
-            // sections where thousands of floor events per second make one-prefix-per-entry
-            // scheduling too expensive. v26 raises burst caps and gives stalled
-            // bursts more simulated updates before falling back. v27 tried a last-resort
-            // direct-hit finish after burst drain, but that can corrupt sections
-            // that already worked through the normal input queue. v28 keeps the
-            // dense KV throttling, removes the direct-hit finish, and only enables
-            // burst mode for genuinely dense key bursts. v29 disables burst execution again for stability comparisons and keeps only the safer KV throttling. v30 changes only MacroKeyViewer fingering: beat-bank key assignment, while gameplay input stays directKeyTimes. v31 fixes the fallback MacroKeyViewer counter compile error and maps row-major 24-key layouts to logical hand/foot banks. v33 reverses left-side bank order so left banks play inside-to-outside while right banks keep display order. v34 uses the finest visual beat grid that stays at or below 1000 BPM. v35 keeps downward folding at <=1000 but only raises low BPM sections up to <=500. v36 adds capped natural-fingering debug logs for overflow/expansion buckets. v37 adds adjustable visual BPM thresholds, a clean UI/log mode patch, lag-spike diagnostics, and a MacroKeyViewer rain view. v40 also replaces the UnityModManager OnGUI delegate from Main.Load postfix because Harmony-patching Main.OnGUI alone can leave UMM using the original delegate.
+            // v47 keeps gameplay input untouched and moves directKeyTimes diagnostics off the hot logging path.
+            // Per-hit diagnostics are stored as numeric samples and dumped only when the scheduler stops.
             bool plainSingle =
                 keyCount == 1 &&
                 entry.RawEntryCount == 1 &&
@@ -220,6 +345,7 @@ namespace Macro_Inserter
                     out int burstKeyCount,
                     out int burstTargetSeqId))
             {
+                double marker = trace.Begin();
                 int burstAfterFloor = DirectKeyTimesInputInjector.InjectBurst(
                     controller,
                     burstKeyCount,
@@ -227,40 +353,56 @@ namespace Macro_Inserter
                     forceSimulation: asyncInputActive,
                     maxSimulationSteps: Math.Min(MaxBurstKeys + 64, Math.Max(1, burstKeyCount) + 64),
                     log);
+                trace.AddDirectCall(marker);
 
-                if (burstAfterFloor >= entry.FirstSeqId)
+                marker = trace.Begin();
+                bool burstReachedFirstTarget = burstAfterFloor >= entry.FirstSeqId;
+                trace.AddFloorCheck(marker);
+
+                if (burstReachedFirstTarget)
                 {
                     ResetStuckPlainSingle(entry.FirstSeqId);
                     currentFloorAfter = burstAfterFloor;
-                    PulseMacroKeyViewer(__instance, entry, burstKeyCount);
+                    marker = trace.Begin();
+                    trace.KeyViewerPulseCount += PulseMacroKeyViewer(__instance, entry, burstKeyCount);
+                    trace.AddKeyViewerNotify(marker);
+                    marker = trace.Begin();
                     RecordDirectKeyTimesSummary(log, burstKeyCount, currentFloorBefore, burstAfterFloor, asyncInputActive);
-                    LogDirectKeyTimesSpikeIfNeeded(__instance, log, "burst", prefixStartRealtime, prefixStartMemory, keyCount, burstKeyCount, dueCount, currentFloorBefore, burstAfterFloor, entry.FirstSeqId, entry.LastSeqId, entry.FirstTargetTimeSeconds, clockSeconds, asyncInputActive);
-                    if (burstAfterFloor < burstTargetSeqId)
-                    {
-                        LogNormal(log, $"directKeyTimes burst partial. dueCount={dueCount} burstEntries={burstEntryCount} burstKeys={burstKeyCount} targetAfter={burstTargetSeqId} currentFloorBefore={currentFloorBefore} afterFloor={burstAfterFloor}");
-                    }
-
+                    trace.AddSummary(marker);
+                    trace.Finish();
+                    LogDirectKeyTimesSpikeIfNeeded(__instance, log, "burst", prefixStartRealtime, prefixStartMemory, keyCount, burstKeyCount, dueCount, currentFloorBefore, burstAfterFloor, entry.FirstSeqId, entry.LastSeqId, entry.FirstTargetTimeSeconds, clockSeconds, asyncInputActive, trace);
                     __result = true;
                     return false;
                 }
 
-                LogNormal(log, $"directKeyTimes burst did not reach first target. dueCount={dueCount} burstEntries={burstEntryCount} burstKeys={burstKeyCount} targetAfter={burstTargetSeqId} currentFloorBefore={currentFloorBefore} afterFloor={burstAfterFloor}");
+                trace.Finish();
             }
 
+            double directMarker = trace.Begin();
             int afterFloor = DirectKeyTimesInputInjector.Inject(
                 controller,
                 keyCount,
                 forceSimulation: asyncInputActive,
                 allowDirectHitFallback: false,
                 log);
+            trace.AddDirectCall(directMarker);
 
-            if (afterFloor >= entry.FirstSeqId)
+            double floorMarker = trace.Begin();
+            bool reachedTarget = afterFloor >= entry.FirstSeqId;
+            trace.AddFloorCheck(floorMarker);
+
+            if (reachedTarget)
             {
                 ResetStuckPlainSingle(entry.FirstSeqId);
                 currentFloorAfter = afterFloor;
-                PulseMacroKeyViewer(__instance, entry, keyCount);
+                double keyViewerMarker = trace.Begin();
+                trace.KeyViewerPulseCount += PulseMacroKeyViewer(__instance, entry, keyCount);
+                trace.AddKeyViewerNotify(keyViewerMarker);
+                double summaryMarker = trace.Begin();
                 RecordDirectKeyTimesSummary(log, keyCount, currentFloorBefore, afterFloor, asyncInputActive);
-                LogDirectKeyTimesSpikeIfNeeded(__instance, log, "directKeyTimes", prefixStartRealtime, prefixStartMemory, keyCount, keyCount, dueCount, currentFloorBefore, afterFloor, entry.FirstSeqId, entry.LastSeqId, entry.FirstTargetTimeSeconds, clockSeconds, asyncInputActive);
+                trace.AddSummary(summaryMarker);
+                trace.Finish();
+                LogDirectKeyTimesSpikeIfNeeded(__instance, log, "directKeyTimes", prefixStartRealtime, prefixStartMemory, keyCount, keyCount, dueCount, currentFloorBefore, afterFloor, entry.FirstSeqId, entry.LastSeqId, entry.FirstTargetTimeSeconds, clockSeconds, asyncInputActive, trace);
                 __result = true;
                 return false;
             }
@@ -271,20 +413,29 @@ namespace Macro_Inserter
                 double lateMs = Math.Max(0.0, (clockSeconds - entry.FirstTargetTimeSeconds) * 1000.0);
                 if (attempts >= 3 || lateMs >= 60.0)
                 {
+                    double fallbackMarker = trace.Begin();
                     int fallbackAfterFloor = DirectKeyTimesInputInjector.InvokeDirectHitOnly(
                         controller,
                         syntheticHitBudget: 2,
                         log);
-                    LogNormal(log,
-                        $"plainSingle delayed DirectHit fallback tried. seqID={entry.FirstSeqId} attempts={attempts} lateMs={lateMs:F3} currentFloorBefore={currentFloorBefore} afterFloor={fallbackAfterFloor}");
+                    trace.AddDirectCall(fallbackMarker);
 
-                    if (fallbackAfterFloor >= entry.FirstSeqId)
+                    double fallbackFloorMarker = trace.Begin();
+                    bool fallbackReachedTarget = fallbackAfterFloor >= entry.FirstSeqId;
+                    trace.AddFloorCheck(fallbackFloorMarker);
+
+                    if (fallbackReachedTarget)
                     {
                         ResetStuckPlainSingle(entry.FirstSeqId);
                         currentFloorAfter = fallbackAfterFloor;
-                        PulseMacroKeyViewer(__instance, entry, keyCount);
+                        double keyViewerMarker = trace.Begin();
+                        trace.KeyViewerPulseCount += PulseMacroKeyViewer(__instance, entry, keyCount);
+                        trace.AddKeyViewerNotify(keyViewerMarker);
+                        double summaryMarker = trace.Begin();
                         RecordDirectKeyTimesSummary(log, keyCount, currentFloorBefore, fallbackAfterFloor, asyncInputActive);
-                        LogDirectKeyTimesSpikeIfNeeded(__instance, log, "plainSingleDirectHitFallback", prefixStartRealtime, prefixStartMemory, keyCount, keyCount, dueCount, currentFloorBefore, fallbackAfterFloor, entry.FirstSeqId, entry.LastSeqId, entry.FirstTargetTimeSeconds, clockSeconds, asyncInputActive);
+                        trace.AddSummary(summaryMarker);
+                        trace.Finish();
+                        LogDirectKeyTimesSpikeIfNeeded(__instance, log, "plainSingleDirectHitFallback", prefixStartRealtime, prefixStartMemory, keyCount, keyCount, dueCount, currentFloorBefore, fallbackAfterFloor, entry.FirstSeqId, entry.LastSeqId, entry.FirstTargetTimeSeconds, clockSeconds, asyncInputActive, trace);
                         __result = true;
                         return false;
                     }
@@ -296,9 +447,8 @@ namespace Macro_Inserter
             }
 
             currentFloorAfter = currentFloorBefore;
-            LogNormal(log,
-                $"directKeyTimes queued; waiting for floor confirmation. keyCount={keyCount} seqID={entry.FirstSeqId}-{entry.LastSeqId} targetTime={entry.FirstTargetTimeSeconds:F6}s spanMs={entry.SpanMs:F3} rawEntryCount={entry.RawEntryCount} containsMidspin={entry.ContainsMidspin} isNearMidspin={entry.IsNearMidspin} plainSingle={plainSingle} stuckPlainSingleAttempts={stuckPlainSingleAttemptCount} currentFloorBefore={currentFloorBefore} currentFloorAfter={afterFloor} expectedAfter={entry.LastSeqId} dueCount={dueCount} asyncInputActive={asyncInputActive}");
-            LogDirectKeyTimesSpikeIfNeeded(__instance, log, "queuedNoAdvance", prefixStartRealtime, prefixStartMemory, keyCount, keyCount, dueCount, currentFloorBefore, afterFloor, entry.FirstSeqId, entry.LastSeqId, entry.FirstTargetTimeSeconds, clockSeconds, asyncInputActive);
+            trace.Finish();
+            LogDirectKeyTimesSpikeIfNeeded(__instance, log, "queuedNoAdvance", prefixStartRealtime, prefixStartMemory, keyCount, keyCount, dueCount, currentFloorBefore, afterFloor, entry.FirstSeqId, entry.LastSeqId, entry.FirstTargetTimeSeconds, clockSeconds, asyncInputActive, trace);
             __result = false;
             return false;
         }
@@ -374,18 +524,18 @@ namespace Macro_Inserter
             }
         }
 
-        private static void PulseMacroKeyViewer(InternalMacroService service, InputPlanEntry entry, int keyCount)
+        private static int PulseMacroKeyViewer(InternalMacroService service, InputPlanEntry entry, int keyCount)
         {
             InternalMacroSettings? settings = SettingsField?.GetValue(service) as InternalMacroSettings;
             if (settings == null || !settings.EnableMacroKeyViewer || keyCount <= 0)
             {
-                return;
+                return 0;
             }
 
             IReadOnlyList<string> configuredKeys = service.MacroKeyViewer.ConfigureKeys(settings.MacroKeyViewerKeysText);
             if (configuredKeys.Count == 0 && entry.AssignedKeyNames.Count == 0)
             {
-                return;
+                return 0;
             }
 
             // v36: the game input path still only queues keyTimes. Natural fingering is
@@ -394,18 +544,19 @@ namespace Macro_Inserter
             // not destabilize playback.
             if (keyCount >= 128)
             {
-                return;
+                return 0;
             }
 
             const int maxPulsesPerSummaryWindow = 64;
             if (macroKeyViewerPulsesSinceSummary >= maxPulsesPerSummaryWindow)
             {
-                return;
+                return 0;
             }
 
             double durationSeconds = Math.Max(0, settings.MacroKeyViewerPulseMs) / 1000.0;
             int remainingPulseBudget = maxPulsesPerSummaryWindow - macroKeyViewerPulsesSinceSummary;
             int pulseCount = Math.Min(Math.Min(keyCount, 32), remainingPulseBudget);
+            int pulsed = 0;
             for (int i = 0; i < pulseCount; i++)
             {
                 string keyName;
@@ -424,12 +575,15 @@ namespace Macro_Inserter
                 {
                     service.MacroKeyViewer.Pulse(keyName, durationSeconds);
                     macroKeyViewerPulsesSinceSummary++;
+                    pulsed++;
                 }
                 catch
                 {
                     break;
                 }
             }
+
+            return pulsed;
         }
 
         private static void RecordDirectKeyTimesSummary(
@@ -453,16 +607,13 @@ namespace Macro_Inserter
                 return;
             }
 
+            // v47: keep the 0.5s accounting window because MacroKeyViewer pulse throttling
+            // depends on it, but do not emit a string from the input hot path.
             double elapsed = now - lastDirectKeyTimesSummaryRealtime;
             if (elapsed < 0.5)
             {
                 return;
             }
-
-            double keysPerSecond = directKeyTimesKeysSinceSummary / Math.Max(0.001, elapsed);
-            LogMinimal(
-                log,
-                $"directKeyTimes summary. entries={directKeyTimesEntriesSinceSummary} keys={directKeyTimesKeysSinceSummary} floorAdvance={directKeyTimesFloorAdvanceSinceSummary} macroKeyViewerPulses={macroKeyViewerPulsesSinceSummary} elapsedMs={elapsed * 1000.0:F1} approxKps={keysPerSecond:F1} asyncInputActive={asyncInputActive}");
 
             directKeyTimesEntriesSinceSummary = 0;
             directKeyTimesKeysSinceSummary = 0;
@@ -470,6 +621,7 @@ namespace Macro_Inserter
             macroKeyViewerPulsesSinceSummary = 0;
             lastDirectKeyTimesSummaryRealtime = now;
         }
+
         private static void LogDirectKeyTimesSpikeIfNeeded(
             InternalMacroService service,
             Action<string>? log,
@@ -485,14 +637,10 @@ namespace Macro_Inserter
             int lastSeqId,
             double targetTimeSeconds,
             double clockSeconds,
-            bool asyncInputActive)
+            bool asyncInputActive,
+            DirectKeyTimesTrace trace)
         {
             NaturalFingeringOptions.Load();
-            if (!NaturalFingeringOptions.ShouldLog(PseudoChordUiLogMode.Minimal))
-            {
-                return;
-            }
-
             double now = Time.realtimeSinceStartupAsDouble;
             double processingMs = (now - startRealtime) * 1000.0;
             double lateMs = Math.Max(0.0, (clockSeconds - targetTimeSeconds) * 1000.0);
@@ -500,43 +648,175 @@ namespace Macro_Inserter
                                    processingMs >= Math.Max(0.1, NaturalFingeringOptions.LagSpikeLogMs);
             bool lateSpike = NaturalFingeringOptions.EnableLateSpikeLog &&
                              lateMs >= Math.Max(0.1, NaturalFingeringOptions.LateSpikeLogMs);
-            if (!processingSpike && !lateSpike)
-            {
-                return;
-            }
-
-            double minIntervalSeconds = Math.Max(0.0, NaturalFingeringOptions.SpikeLogMinIntervalMs) / 1000.0;
-            if (minIntervalSeconds > 0.0 && now - lastDirectKeyTimesSpikeLogRealtime < minIntervalSeconds)
-            {
-                directKeyTimesSpikeLogSuppressed++;
-                return;
-            }
-
-            int suppressed = directKeyTimesSpikeLogSuppressed;
-            directKeyTimesSpikeLogSuppressed = 0;
-            lastDirectKeyTimesSpikeLogRealtime = now;
-
-            long memoryDeltaBytes = Profiler.GetTotalAllocatedMemoryLong() - startMemoryBytes;
             string reason = processingSpike && lateSpike
                 ? "late+processing"
                 : lateSpike
                     ? "late"
-                    : "processing";
+                    : processingSpike
+                        ? "processing"
+                        : "sample";
 
-            LogMinimal(
-                log,
-                $"directKeyTimes spike v43. reason={reason} op={operation} lateMs={lateMs:F3} lateThresholdMs={NaturalFingeringOptions.LateSpikeLogMs:F3} processingMs={processingMs:F3} processingThresholdMs={NaturalFingeringOptions.LagSpikeLogMs:F3} clock={clockSeconds:F6}s target={targetTimeSeconds:F6}s entryKeys={entryKeyCount} processedKeys={processedKeyCount} dueCount={dueCount} floor={beforeFloor}->{afterFloor} seqID={firstSeqId}-{lastSeqId} asyncInputActive={asyncInputActive} macroKeyViewerPulsesWindow={macroKeyViewerPulsesSinceSummary} memDeltaKB={memoryDeltaBytes / 1024.0:F1} suppressedSinceLast={suppressed}");
+            long memoryDeltaBytes = Profiler.GetTotalAllocatedMemoryLong() - startMemoryBytes;
+            RecordDeferredTrace(
+                operation,
+                reason,
+                clockSeconds,
+                targetTimeSeconds,
+                lateMs,
+                processingMs,
+                entryKeyCount,
+                processedKeyCount,
+                dueCount,
+                beforeFloor,
+                afterFloor,
+                firstSeqId,
+                lastSeqId,
+                asyncInputActive,
+                trace,
+                memoryDeltaBytes / 1024.0,
+                lateSpike,
+                processingSpike);
+        }
 
-            if (NaturalFingeringOptions.ShouldLog(PseudoChordUiLogMode.Normal))
+        private static void RecordDeferredTrace(
+            string operation,
+            string reason,
+            double clockSeconds,
+            double targetTimeSeconds,
+            double lateMs,
+            double processingMs,
+            int entryKeyCount,
+            int processedKeyCount,
+            int dueCount,
+            int beforeFloor,
+            int afterFloor,
+            int firstSeqId,
+            int lastSeqId,
+            bool asyncInputActive,
+            DirectKeyTimesTrace trace,
+            double memoryDeltaKb,
+            bool lateSpike,
+            bool processingSpike)
+        {
+            DeferredDirectKeyTimesTrace? existingEntry = DeferredTraceRing[deferredTraceWriteIndex];
+            if (existingEntry == null)
             {
-                string context = BuildInputPlanContext(service, clockSeconds);
-                LogNormal(log, $"directKeyTimes spike context. {context}");
+                existingEntry = new DeferredDirectKeyTimesTrace();
+                DeferredTraceRing[deferredTraceWriteIndex] = existingEntry;
             }
 
-            if (NaturalFingeringOptions.ShouldLog(PseudoChordUiLogMode.Verbose))
+            DeferredDirectKeyTimesTrace entry = existingEntry;
+            entry.Operation = operation;
+            entry.Reason = reason;
+            entry.ClockSeconds = clockSeconds;
+            entry.TargetTimeSeconds = targetTimeSeconds;
+            entry.LateMs = lateMs;
+            entry.ProcessingMs = processingMs;
+            entry.EntryKeyCount = entryKeyCount;
+            entry.ProcessedKeyCount = processedKeyCount;
+            entry.DueCount = dueCount;
+            entry.BeforeFloor = beforeFloor;
+            entry.AfterFloor = afterFloor;
+            entry.FirstSeqId = firstSeqId;
+            entry.LastSeqId = lastSeqId;
+            entry.AsyncInputActive = asyncInputActive;
+            entry.StartFrame = trace.StartFrame;
+            entry.EndFrame = trace.EndFrame;
+            entry.StartDeltaTimeMs = trace.StartDeltaTimeMs;
+            entry.EndDeltaTimeMs = trace.EndDeltaTimeMs;
+            entry.StartUnscaledDeltaTimeMs = trace.StartUnscaledDeltaTimeMs;
+            entry.EndUnscaledDeltaTimeMs = trace.EndUnscaledDeltaTimeMs;
+            entry.SetupMs = trace.SetupMs;
+            entry.DirectCallMs = trace.DirectCallMs;
+            entry.FloorCheckMs = trace.FloorCheckMs;
+            entry.KeyViewerNotifyMs = trace.KeyViewerNotifyMs;
+            entry.SummaryMs = trace.SummaryMs;
+            entry.TotalMs = trace.TotalMs;
+            entry.KeyViewerEnabled = trace.KeyViewerEnabled;
+            entry.RainEnabled = trace.RainEnabled;
+            entry.KeyViewerPulseCount = trace.KeyViewerPulseCount;
+            entry.MacroKeyViewerPulsesWindow = macroKeyViewerPulsesSinceSummary;
+            entry.MemoryDeltaKb = memoryDeltaKb;
+
+            deferredTraceWriteIndex = (deferredTraceWriteIndex + 1) % DeferredTraceCapacity;
+            if (deferredTraceCount < DeferredTraceCapacity)
             {
-                string current = BuildCurrentEntryDebug(firstSeqId, targetTimeSeconds, clockSeconds, entryKeyCount, processedKeyCount, dueCount);
-                LogVerbose(log, $"directKeyTimes spike current. {current}");
+                deferredTraceCount++;
+            }
+
+            deferredTraceTotalCount++;
+            if (lateSpike)
+            {
+                deferredLateSpikeCount++;
+            }
+
+            if (processingSpike)
+            {
+                deferredProcessingSpikeCount++;
+            }
+
+            if (operation == "queuedNoAdvance")
+            {
+                deferredQueuedNoAdvanceCount++;
+            }
+
+            deferredMaxDueCount = Math.Max(deferredMaxDueCount, dueCount);
+            deferredMaxLateMs = Math.Max(deferredMaxLateMs, lateMs);
+            deferredMaxProcessingMs = Math.Max(deferredMaxProcessingMs, processingMs);
+            deferredMaxDeltaMs = Math.Max(deferredMaxDeltaMs, Math.Max(trace.StartDeltaTimeMs, trace.EndDeltaTimeMs));
+            deferredMaxAfterFloor = Math.Max(deferredMaxAfterFloor, afterFloor);
+        }
+
+        internal static void ResetDeferredDiagnostics()
+        {
+            for (int i = 0; i < DeferredTraceRing.Length; i++)
+            {
+                if (DeferredTraceRing[i] == null)
+                {
+                    DeferredTraceRing[i] = new DeferredDirectKeyTimesTrace();
+                }
+            }
+
+            deferredTraceWriteIndex = 0;
+            deferredTraceCount = 0;
+            deferredTraceTotalCount = 0;
+            deferredLateSpikeCount = 0;
+            deferredProcessingSpikeCount = 0;
+            deferredQueuedNoAdvanceCount = 0;
+            deferredMaxDueCount = 0;
+            deferredMaxLateMs = 0.0;
+            deferredMaxProcessingMs = 0.0;
+            deferredMaxDeltaMs = 0.0;
+            deferredMaxAfterFloor = 0;
+            directKeyTimesEntriesSinceSummary = 0;
+            directKeyTimesKeysSinceSummary = 0;
+            directKeyTimesFloorAdvanceSinceSummary = 0;
+            macroKeyViewerPulsesSinceSummary = 0;
+            lastDirectKeyTimesSummaryRealtime = 0.0;
+            ResetStuckPlainSingle(-1);
+        }
+
+        internal static void DumpRecentDirectKeyTimes(Action<string>? log, string stopReason)
+        {
+            if (log == null || deferredTraceCount <= 0 || !NaturalFingeringOptions.ShouldLog(PseudoChordUiLogMode.Minimal))
+            {
+                return;
+            }
+
+            log($"directKeyTimes deferred diagnostics v47. stopReason={stopReason} stored={deferredTraceCount}/{DeferredTraceCapacity} totalSamples={deferredTraceTotalCount} lateSpikes={deferredLateSpikeCount} processingSpikes={deferredProcessingSpikeCount} queuedNoAdvance={deferredQueuedNoAdvanceCount} maxLateMs={deferredMaxLateMs:F3} maxProcessingMs={deferredMaxProcessingMs:F3} maxDeltaMs={deferredMaxDeltaMs:F2} maxDueCount={deferredMaxDueCount} maxAfterFloor={deferredMaxAfterFloor}");
+
+            int start = (deferredTraceWriteIndex - deferredTraceCount + DeferredTraceCapacity) % DeferredTraceCapacity;
+            for (int i = 0; i < deferredTraceCount; i++)
+            {
+                int ringIndex = (start + i) % DeferredTraceCapacity;
+                DeferredDirectKeyTimesTrace? entry = DeferredTraceRing[ringIndex];
+                if (entry == null)
+                {
+                    continue;
+                }
+
+                log(
+                    $"directKeyTimes deferred[{i + 1}/{deferredTraceCount}]. reason={entry.Reason} op={entry.Operation} lateMs={entry.LateMs:F3} processingMs={entry.ProcessingMs:F3} clock={entry.ClockSeconds:F6}s target={entry.TargetTimeSeconds:F6}s entryKeys={entry.EntryKeyCount} processedKeys={entry.ProcessedKeyCount} dueCount={entry.DueCount} floor={entry.BeforeFloor}->{entry.AfterFloor} seqID={entry.FirstSeqId}-{entry.LastSeqId} asyncInputActive={entry.AsyncInputActive} frame={entry.StartFrame}->{entry.EndFrame} deltaMs={entry.StartDeltaTimeMs:F2}->{entry.EndDeltaTimeMs:F2} unscaledDeltaMs={entry.StartUnscaledDeltaTimeMs:F2}->{entry.EndUnscaledDeltaTimeMs:F2} splitMs=setup:{entry.SetupMs:F3},direct:{entry.DirectCallMs:F3},floor:{entry.FloorCheckMs:F3},kv:{entry.KeyViewerNotifyMs:F3},summary:{entry.SummaryMs:F3},total:{entry.TotalMs:F3} keyViewerEnabled={entry.KeyViewerEnabled} rainEnabled={entry.RainEnabled} kvPulsesThisEntry={entry.KeyViewerPulseCount} macroKeyViewerPulsesWindow={entry.MacroKeyViewerPulsesWindow} memDeltaKB={entry.MemoryDeltaKb:F1}");
             }
         }
 

@@ -123,7 +123,14 @@ internal sealed class MacroKeyViewerOverlay : MonoBehaviour
         GUILayout.BeginArea(area);
         DrawKeyViewerContent(state, keys, columns, keyWidth, keyHeight, scale, pressedStyle, idleStyle, textColor, panelStyle, area, keyRects);
         GUILayout.EndArea();
-        MacroKeyViewerRainOverlay.Draw(macroSettings, keys, keyRects);
+        if (macroSettings.EnableKeyViewerRain)
+        {
+            MacroKeyViewerRainOverlay.Draw(macroSettings, keys, keyRects);
+        }
+        else
+        {
+            MacroKeyViewerRainOverlay.Clear();
+        }
     }
 
     private static float ResolveY(float configuredY, float height)

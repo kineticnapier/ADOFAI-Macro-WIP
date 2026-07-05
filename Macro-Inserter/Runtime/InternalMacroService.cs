@@ -11,7 +11,6 @@ internal sealed class InternalMacroService
     private const float ClockLostLogIntervalSeconds = 1.0f;
     private const float CurrentFloorLostLogIntervalSeconds = 1.0f;
     private const float ClockResetWaitLogIntervalSeconds = 1.0f;
-    private const float PlayerControlTickLogIntervalSeconds = 1.0f;
     private const float FireSkipLogIntervalSeconds = 1.0f;
     private const double StaleClockStartMarginSeconds = 5.0;
     private const int AdaptiveDiffWindowSize = 30;
@@ -47,7 +46,6 @@ internal sealed class InternalMacroService
     private float lastClockLostLogTime = -10.0f;
     private float lastCurrentFloorLostLogTime = -10.0f;
     private float lastClockResetWaitLogTime = -10.0f;
-    private float lastPlayerControlTickLogTime = -10.0f;
     private float lastFireSkipLogTime = -10.0f;
     private float lastStartRewindUnityTime = -10.0f;
     private double lastStartRewindClockTime = -1.0;
@@ -144,8 +142,6 @@ internal sealed class InternalMacroService
 
     public void TickForPlayerControlUpdate()
     {
-        LogPlayerControlUpdateTick();
-
         if (!settings.EnableInternalMacro)
         {
             Stop("settings disabled");
@@ -366,6 +362,11 @@ internal sealed class InternalMacroService
         if (!wasRunning && !wasArmed)
         {
             return;
+        }
+
+        if (wasRunning)
+        {
+            PseudoChordInputPlanFix.DumpRecentDirectKeyTimes(log, reason);
         }
 
         log($"Internal macro scheduler stopped. reason={reason}, wasRunning={wasRunning}, wasArmed={wasArmed}");
@@ -616,6 +617,7 @@ internal sealed class InternalMacroService
             return false;
         }
 
+        PseudoChordInputPlanFix.ResetDeferredDiagnostics();
         armed = false;
         running = true;
         runningFireMode = settings.FireMode;
@@ -730,7 +732,12 @@ internal sealed class InternalMacroService
             return;
         }
 
-        if (TryReadCurrentFloorSeqId(out int currentFloorSeqId) &&
+        // The beginning-stale guard is only valid before the first scheduled
+        // macro input has been consumed.  Some charts intentionally have a long
+        // gap after the manual first hit; using inputPlan[0] forever made those
+        // charts look stale while waiting for inputPlan[1].
+        if (nextIndex <= 0 &&
+            TryReadCurrentFloorSeqId(out int currentFloorSeqId) &&
             inputPlan.Count > 0 &&
             IsStaleClockAtBeginning(clockSeconds, currentFloorSeqId, inputPlan[0].FirstTargetTimeSeconds))
         {
@@ -1318,17 +1325,6 @@ internal sealed class InternalMacroService
 
         lastClockResetWaitLogTime = Time.unscaledTime;
         LogNormal($"waiting for clock reset: currentFloor={currentFloor} firstTargetTime={firstTargetTime:F6}s clockTime={clockSeconds:F6}s");
-    }
-
-    private void LogPlayerControlUpdateTick()
-    {
-        if (Time.unscaledTime - lastPlayerControlTickLogTime < PlayerControlTickLogIntervalSeconds)
-        {
-            return;
-        }
-
-        lastPlayerControlTickLogTime = Time.unscaledTime;
-        LogVerbose($"PlayerControl_Update tick received. armed={armed} running={running}");
     }
 
     private void LogFireSkip(string reason)
