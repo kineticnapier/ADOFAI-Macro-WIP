@@ -18,7 +18,7 @@ namespace Macro_Inserter
 {
     internal static class PseudoChordInputPlanFix
     {
-        private static readonly Harmony Harmony = new Harmony("Macro-Inserter.PseudoChordInputPlanFix.v50");
+        private static readonly Harmony Harmony = new Harmony("Macro-Inserter.PseudoChordInputPlanFix.v52");
         private static readonly FieldInfo? SettingsField = AccessTools.Field(typeof(InternalMacroService), "settings");
         private static readonly FieldInfo? LogField = AccessTools.Field(typeof(InternalMacroService), "log");
         private static readonly FieldInfo? InputPlanField = AccessTools.Field(typeof(InternalMacroService), "inputPlan");
@@ -39,6 +39,7 @@ namespace Macro_Inserter
         private static double lastDirectKeyTimesSummaryRealtime;
         private static int stuckPlainSingleSeqId = -1;
         private static int stuckPlainSingleAttemptCount;
+        private static int lastQueueOnlyKeyViewerPulseSeqId = -1;
         private static readonly DeferredDirectKeyTimesTrace[] DeferredTraceRing = new DeferredDirectKeyTimesTrace[DeferredTraceCapacity];
         private static int deferredTraceWriteIndex;
         private static int deferredTraceCount;
@@ -211,11 +212,18 @@ namespace Macro_Inserter
                     .Where(method => method.Name == "TryFirePseudoChordGroup")
                     .ToArray();
 
+                MethodInfo? effectiveTargetOriginal = AccessTools.Method(
+                    typeof(InternalMacroService),
+                    "GetEffectiveTargetTimeSeconds",
+                    new[] { typeof(InputPlanEntry) });
+                MethodInfo? effectiveTargetPostfix = AccessTools.Method(typeof(PseudoChordInputPlanFix), nameof(GetEffectiveInputTargetTimePostfix));
+
                 NaturalFingeringOptions.Load();
                 MacroKeyViewerRainOverlay.EnsureInstalled();
 
                 bool buildPatched = false;
                 bool firePatched = false;
+                bool queueLeadPatched = false;
                 if (buildOriginal != null && buildPrefix != null)
                 {
                     Harmony.Patch(buildOriginal, prefix: new HarmonyMethod(buildPrefix));
@@ -231,13 +239,40 @@ namespace Macro_Inserter
                     }
                 }
 
+                if (effectiveTargetOriginal != null && effectiveTargetPostfix != null)
+                {
+                    Harmony.Patch(effectiveTargetOriginal, postfix: new HarmonyMethod(effectiveTargetPostfix));
+                    queueLeadPatched = true;
+                }
+
                 patched = buildPatched && firePatched;
-                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v50 installed by {reason}. buildPatched={buildPatched} firePatched={firePatched} rainOverlay=True uiPatchDisabled=True loadPatchDisabled=True logPatchDisabled=True");
+                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v52 installed by {reason}. buildPatched={buildPatched} firePatched={firePatched} queueLeadPatched={queueLeadPatched} rainOverlay=True uiPatchDisabled=True loadPatchDisabled=True logPatchDisabled=True");
             }
             catch (Exception ex)
             {
-                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v49 install failed: {ex}");
+                Debug.Log($"[Macro-Inserter] PseudoChordInputPlanFix v52 install failed: {ex}");
             }
+        }
+
+        private static void GetEffectiveInputTargetTimePostfix(
+            InternalMacroService __instance,
+            InputPlanEntry entry,
+            ref double __result)
+        {
+            InternalMacroSettings? settings = SettingsField?.GetValue(__instance) as InternalMacroSettings;
+            if (settings == null ||
+                !settings.EnableCameraSafeMode ||
+                !settings.CameraSafeQueueOnlyMode ||
+                settings.CameraSafeQueueLeadMs <= 0.0)
+            {
+                return;
+            }
+
+            // v51: queue-only avoids forced Simulated_PlayerControl_Update, but the
+            // game's normal update consumes the queued keyTimes one frame later.
+            // Apply a queue-only lead to scheduling, separate from global offset/
+            // play-correction, so the camera-safe path does not lean late/right.
+            __result = Math.Max(0.0, __result - settings.CameraSafeQueueLeadMs / 1000.0);
         }
 
         private static bool BuildInputPlanPrefix(
@@ -430,6 +465,22 @@ namespace Macro_Inserter
 
             if (cameraSafeQueueOnly)
             {
+                if (settings != null && settings.CameraSafePulseKeyViewerOnQueue && lastQueueOnlyKeyViewerPulseSeqId != entry.FirstSeqId)
+                {
+                    double keyViewerMarker = trace.Begin();
+                    trace.KeyViewerPulseCount += PulseMacroKeyViewer(__instance, entry, keyCount);
+                    trace.AddKeyViewerNotify(keyViewerMarker);
+                    lastQueueOnlyKeyViewerPulseSeqId = entry.FirstSeqId;
+                }
+
+                // v52: in queue-only mode the floor usually advances in the game's
+                // next normal update, so the reachedTarget branch is skipped. Still
+                // update the lightweight summary counters so the MacroKeyViewer
+                // pulse budget resets periodically instead of dying after 64 pulses.
+                double queueSummaryMarker = trace.Begin();
+                RecordDirectKeyTimesSummary(log, keyCount, currentFloorBefore, afterFloor, asyncInputActive);
+                trace.AddSummary(queueSummaryMarker);
+
                 currentFloorAfter = currentFloorBefore;
                 trace.Finish();
                 LogDirectKeyTimesSpikeIfNeeded(__instance, log, "queuedWait", prefixStartRealtime, prefixStartMemory, keyCount, keyCount, dueCount, currentFloorBefore, afterFloor, entry.FirstSeqId, entry.LastSeqId, entry.FirstTargetTimeSeconds, clockSeconds, asyncInputActive, trace);
@@ -554,8 +605,31 @@ namespace Macro_Inserter
             }
         }
 
+        private static void ResetMacroKeyViewerPulseBudgetIfWindowElapsed()
+        {
+            double now = Time.realtimeSinceStartupAsDouble;
+            if (lastDirectKeyTimesSummaryRealtime <= 0.0)
+            {
+                lastDirectKeyTimesSummaryRealtime = now;
+                return;
+            }
+
+            if (now - lastDirectKeyTimesSummaryRealtime < 0.5)
+            {
+                return;
+            }
+
+            directKeyTimesEntriesSinceSummary = 0;
+            directKeyTimesKeysSinceSummary = 0;
+            directKeyTimesFloorAdvanceSinceSummary = 0;
+            macroKeyViewerPulsesSinceSummary = 0;
+            lastDirectKeyTimesSummaryRealtime = now;
+        }
+
         private static int PulseMacroKeyViewer(InternalMacroService service, InputPlanEntry entry, int keyCount)
         {
+            ResetMacroKeyViewerPulseBudgetIfWindowElapsed();
+
             InternalMacroSettings? settings = SettingsField?.GetValue(service) as InternalMacroSettings;
             if (settings == null || !settings.EnableMacroKeyViewer || keyCount <= 0)
             {
@@ -630,26 +704,11 @@ namespace Macro_Inserter
                 directKeyTimesFloorAdvanceSinceSummary += afterFloor - beforeFloor;
             }
 
-            double now = Time.realtimeSinceStartupAsDouble;
-            if (lastDirectKeyTimesSummaryRealtime <= 0.0)
-            {
-                lastDirectKeyTimesSummaryRealtime = now;
-                return;
-            }
-
-            // v47: keep the 0.5s accounting window because MacroKeyViewer pulse throttling
-            // depends on it, but do not emit a string from the input hot path.
-            double elapsed = now - lastDirectKeyTimesSummaryRealtime;
-            if (elapsed < 0.5)
-            {
-                return;
-            }
-
-            directKeyTimesEntriesSinceSummary = 0;
-            directKeyTimesKeysSinceSummary = 0;
-            directKeyTimesFloorAdvanceSinceSummary = 0;
-            macroKeyViewerPulsesSinceSummary = 0;
-            lastDirectKeyTimesSummaryRealtime = now;
+            // v47/v52: keep the 0.5s accounting window because MacroKeyViewer
+            // pulse throttling depends on it, but do not emit a string from the input
+            // hot path. v52 also lets PulseMacroKeyViewer reset this window directly
+            // so camera-safe queue-only mode cannot run out of pulse budget forever.
+            ResetMacroKeyViewerPulseBudgetIfWindowElapsed();
         }
 
         private static void LogDirectKeyTimesSpikeIfNeeded(
@@ -824,6 +883,7 @@ namespace Macro_Inserter
             macroKeyViewerPulsesSinceSummary = 0;
             lastDirectKeyTimesSummaryRealtime = 0.0;
             ResetStuckPlainSingle(-1);
+            lastQueueOnlyKeyViewerPulseSeqId = -1;
         }
 
         internal static void DumpRecentDirectKeyTimes(Action<string>? log, string stopReason, InternalMacroSettings? settings)

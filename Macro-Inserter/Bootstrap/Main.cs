@@ -48,6 +48,7 @@ public static class Main
     private static string directKeyTimesSpikeLogMinIntervalMsText = "50";
     private static string directKeyTimesDeferredDumpEntriesText = "32";
     private static string cameraSafeMaxHitsPerPlayerControlUpdateText = "8";
+    private static string cameraSafeQueueLeadMsText = "4";
     private static bool enabled;
     private static float lastOnUpdateExceptionLogTime = -10.0f;
     private static string? lastOnUpdateExceptionSignature;
@@ -92,6 +93,8 @@ public static class Main
         directKeyTimesDeferredDumpEntriesText = settings.DirectKeyTimesDeferredDumpEntries.ToString(CultureInfo.InvariantCulture);
         settings.CameraSafeMaxHitsPerPlayerControlUpdate = Math.Max(1, Math.Min(128, settings.CameraSafeMaxHitsPerPlayerControlUpdate));
         cameraSafeMaxHitsPerPlayerControlUpdateText = settings.CameraSafeMaxHitsPerPlayerControlUpdate.ToString(CultureInfo.InvariantCulture);
+        settings.CameraSafeQueueLeadMs = Math.Max(0.0, Math.Min(50.0, settings.CameraSafeQueueLeadMs));
+        cameraSafeQueueLeadMsText = settings.CameraSafeQueueLeadMs.ToString(CultureInfo.InvariantCulture);
         NaturalFingeringOptions.Load();
         settings.LoggingMode = NormalizeLoggingMode(settings.LoggingMode);
         NaturalFingeringOptions.LogMode = NaturalFingeringOptions.FromLoggingMode(settings.LoggingMode);
@@ -250,9 +253,12 @@ public static class Main
         settings.CameraSafeStrictMode = GUILayout.Toggle(settings.CameraSafeStrictMode, "CameraSafeStrictMode");
         settings.CameraSafeSplitInputGroups = GUILayout.Toggle(settings.CameraSafeSplitInputGroups, "CameraSafeSplitInputGroups");
         settings.CameraSafeQueueOnlyMode = GUILayout.Toggle(settings.CameraSafeQueueOnlyMode, "CameraSafeQueueOnlyMode");
+        settings.CameraSafePulseKeyViewerOnQueue = GUILayout.Toggle(settings.CameraSafePulseKeyViewerOnQueue, "CameraSafePulseKeyViewerOnQueue");
         DrawIntSetting("CameraSafeMaxHits/Update", ref cameraSafeMaxHitsPerPlayerControlUpdateText, 1, 128, value => settings.CameraSafeMaxHitsPerPlayerControlUpdate = value);
+        DrawDoubleSetting("CameraSafeQueueLeadMs", ref cameraSafeQueueLeadMsText, 0.0, 50.0, value => settings.CameraSafeQueueLeadMs = value);
         GUILayout.Label("Camera safe strict mode limits runtime directKeyTimes to 1 plan entry per PlayerControl_Update and splits grouped runtime inputs before fingering.");
         GUILayout.Label("QueueOnly mode avoids forced Simulated_PlayerControl_Update; queued keyTimes are consumed by the game update path instead.");
+        GUILayout.Label("QueueLeadMs advances only queue insertion in CameraSafeQueueOnlyMode to compensate the one-frame consume delay. Increase if judgement leans right/late.");
 
         GUILayout.BeginHorizontal();
         GUILayout.Label("PseudoChordWindowMs", GUILayout.Width(140f));

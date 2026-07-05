@@ -66,6 +66,14 @@ public sealed class InternalMacroSettings : UnityModManager.ModSettings
     // This avoids calling Simulated_PlayerControl_Update inside the macro hot path,
     // which can advance floors before camera/track state has caught up.
     public bool CameraSafeQueueOnlyMode = true;
+    // v51: queue-only mode consumes input on the next normal game update, which
+    // can make hits visually/judgement-wise late. This is not the global
+    // DispatchLeadMs; it only advances queue insertion for camera-safe queue-only.
+    public double CameraSafeQueueLeadMs = 4.0;
+
+    // v51: queue-only mode no longer observes immediate floor advance, so pulse
+    // MacroKeyViewer when the input is queued, not only when the floor confirms.
+    public bool CameraSafePulseKeyViewerOnQueue = true;
 
     public override void Save(UnityModManager.ModEntry modEntry)
     {
