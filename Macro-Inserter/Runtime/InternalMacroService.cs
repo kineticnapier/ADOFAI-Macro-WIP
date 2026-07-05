@@ -366,7 +366,7 @@ internal sealed class InternalMacroService
 
         if (wasRunning)
         {
-            PseudoChordInputPlanFix.DumpRecentDirectKeyTimes(log, reason);
+            PseudoChordInputPlanFix.DumpRecentDirectKeyTimes(log, reason, settings);
         }
 
         log($"Internal macro scheduler stopped. reason={reason}, wasRunning={wasRunning}, wasArmed={wasArmed}");
@@ -1011,9 +1011,19 @@ internal sealed class InternalMacroService
 
     private int GetMaxHitsPerPlayerControlUpdate()
     {
-        return settings.EnableHighDensityMode
-            ? Math.Max(1, settings.MaxHitsPerPlayerControlUpdate)
-            : 1;
+        if (!settings.EnableHighDensityMode)
+        {
+            return 1;
+        }
+
+        int configured = Math.Max(1, settings.MaxHitsPerPlayerControlUpdate);
+        if (!settings.EnableCameraSafeMode)
+        {
+            return configured;
+        }
+
+        int cameraSafeCap = Math.Max(1, settings.CameraSafeMaxHitsPerPlayerControlUpdate);
+        return Math.Min(configured, cameraSafeCap);
     }
 
     private bool TryFirePseudoChordGroup(

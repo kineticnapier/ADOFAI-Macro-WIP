@@ -50,6 +50,23 @@ public sealed class InternalMacroSettings : UnityModManager.ModSettings
     public int KeyViewerRainMaxSegments = 512;
     public float KeyViewerRainYOffsetPx = 2.0f;
 
+    // v48: keep gameplay hot paths quiet.  These only control the deferred
+    // directKeyTimes dump emitted after the scheduler stops.
+    public bool DirectKeyTimesDumpOnlyOnFailure = true;
+    public bool DirectKeyTimesDumpOnWin = false;
+    public int DirectKeyTimesDeferredDumpEntries = 32;
+
+    // v48: camera-safe mode prevents the runtime directKeyTimes plan from
+    // advancing too many floors in one PlayerControl_Update after a hitch.
+    public bool EnableCameraSafeMode = true;
+    public int CameraSafeMaxHitsPerPlayerControlUpdate = 1;
+    public bool CameraSafeStrictMode = true;
+    public bool CameraSafeSplitInputGroups = true;
+    // v50: queue keyTimes and let the game's normal PlayerControl_Update consume them.
+    // This avoids calling Simulated_PlayerControl_Update inside the macro hot path,
+    // which can advance floors before camera/track state has caught up.
+    public bool CameraSafeQueueOnlyMode = true;
+
     public override void Save(UnityModManager.ModEntry modEntry)
     {
         Save(this, modEntry);

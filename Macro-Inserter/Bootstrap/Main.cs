@@ -46,6 +46,8 @@ public static class Main
     private static string directKeyTimesLateSpikeLogMsText = "8";
     private static string directKeyTimesProcessingSpikeLogMsText = "8";
     private static string directKeyTimesSpikeLogMinIntervalMsText = "50";
+    private static string directKeyTimesDeferredDumpEntriesText = "32";
+    private static string cameraSafeMaxHitsPerPlayerControlUpdateText = "8";
     private static bool enabled;
     private static float lastOnUpdateExceptionLogTime = -10.0f;
     private static string? lastOnUpdateExceptionSignature;
@@ -86,6 +88,10 @@ public static class Main
         settings.KeyViewerRainColor = keyViewerRainColorText;
         keyViewerRainMaxSegmentsText = settings.KeyViewerRainMaxSegments.ToString(CultureInfo.InvariantCulture);
         keyViewerRainYOffsetPxText = settings.KeyViewerRainYOffsetPx.ToString(CultureInfo.InvariantCulture);
+        settings.DirectKeyTimesDeferredDumpEntries = Math.Max(0, Math.Min(64, settings.DirectKeyTimesDeferredDumpEntries));
+        directKeyTimesDeferredDumpEntriesText = settings.DirectKeyTimesDeferredDumpEntries.ToString(CultureInfo.InvariantCulture);
+        settings.CameraSafeMaxHitsPerPlayerControlUpdate = Math.Max(1, Math.Min(128, settings.CameraSafeMaxHitsPerPlayerControlUpdate));
+        cameraSafeMaxHitsPerPlayerControlUpdateText = settings.CameraSafeMaxHitsPerPlayerControlUpdate.ToString(CultureInfo.InvariantCulture);
         NaturalFingeringOptions.Load();
         settings.LoggingMode = NormalizeLoggingMode(settings.LoggingMode);
         NaturalFingeringOptions.LogMode = NaturalFingeringOptions.FromLoggingMode(settings.LoggingMode);
@@ -204,6 +210,7 @@ public static class Main
         GUILayout.EndHorizontal();
 
         DrawNaturalFingeringDiagnostics();
+        DrawDeferredDiagnosticsSettings();
 
         GUILayout.BeginHorizontal();
         GUILayout.Label("FirstHitMode", GUILayout.Width(140f));
@@ -238,6 +245,14 @@ public static class Main
             settings.MaxHitsPerPlayerControlUpdate = Math.Max(1, maxHitsPerUpdate);
         }
         GUILayout.EndHorizontal();
+
+        settings.EnableCameraSafeMode = GUILayout.Toggle(settings.EnableCameraSafeMode, "EnableCameraSafeMode");
+        settings.CameraSafeStrictMode = GUILayout.Toggle(settings.CameraSafeStrictMode, "CameraSafeStrictMode");
+        settings.CameraSafeSplitInputGroups = GUILayout.Toggle(settings.CameraSafeSplitInputGroups, "CameraSafeSplitInputGroups");
+        settings.CameraSafeQueueOnlyMode = GUILayout.Toggle(settings.CameraSafeQueueOnlyMode, "CameraSafeQueueOnlyMode");
+        DrawIntSetting("CameraSafeMaxHits/Update", ref cameraSafeMaxHitsPerPlayerControlUpdateText, 1, 128, value => settings.CameraSafeMaxHitsPerPlayerControlUpdate = value);
+        GUILayout.Label("Camera safe strict mode limits runtime directKeyTimes to 1 plan entry per PlayerControl_Update and splits grouped runtime inputs before fingering.");
+        GUILayout.Label("QueueOnly mode avoids forced Simulated_PlayerControl_Update; queued keyTimes are consumed by the game update path instead.");
 
         GUILayout.BeginHorizontal();
         GUILayout.Label("PseudoChordWindowMs", GUILayout.Width(140f));
@@ -420,6 +435,15 @@ public static class Main
         directKeyTimesLateSpikeLogMsText = NaturalFingeringOptions.LateSpikeLogMs.ToString(CultureInfo.InvariantCulture);
         directKeyTimesProcessingSpikeLogMsText = NaturalFingeringOptions.LagSpikeLogMs.ToString(CultureInfo.InvariantCulture);
         directKeyTimesSpikeLogMinIntervalMsText = NaturalFingeringOptions.SpikeLogMinIntervalMs.ToString(CultureInfo.InvariantCulture);
+    }
+
+    private static void DrawDeferredDiagnosticsSettings()
+    {
+        GUILayout.Label("Deferred directKeyTimes diagnostics");
+        settings.DirectKeyTimesDumpOnlyOnFailure = GUILayout.Toggle(settings.DirectKeyTimesDumpOnlyOnFailure, "DumpOnlyOnFailure");
+        settings.DirectKeyTimesDumpOnWin = GUILayout.Toggle(settings.DirectKeyTimesDumpOnWin, "DumpOnWin");
+        DrawIntSetting("DeferredDumpEntries", ref directKeyTimesDeferredDumpEntriesText, 0, 64, value => settings.DirectKeyTimesDeferredDumpEntries = value);
+        GUILayout.Label("v47/v48 keeps directKeyTimes logs out of the hot path; dump settings only affect stop/fail/win output.");
     }
 
     private static void DrawNaturalFingeringDiagnostics()
