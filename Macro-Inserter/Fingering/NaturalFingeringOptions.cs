@@ -18,6 +18,16 @@ internal static class NaturalFingeringOptions
     public static bool CleanUiEnabled { get; set; } = true;
     public static double FoldDownMaxBpm { get; set; } = 1000.0;
     public static double RaiseUpMaxBpm { get; set; } = 500.0;
+
+    // v65: when one visual beat bucket overflows the upper-bank keys, switch that
+    // whole BPM section to a stable chronological rolling order instead of resetting
+    // to the same-side upper bank every beat. This keeps dense / magic-circle parts
+    // looking like two-hand rolling instead of large one-beat key dumps.
+    public static bool EnableRollingOverflowFingering { get; set; } = true;
+    public static int RollingOverflowStartInputs { get; set; } = 5;
+    public static int RollingOverflowMaxKeys { get; set; } = 24;
+    public static bool RollingOverflowUseFeet { get; set; } = true;
+
     public static PseudoChordUiLogMode LogMode { get; set; } = PseudoChordUiLogMode.Minimal;
 
     public static bool EnableFingeringLog { get; set; } = true;
@@ -52,6 +62,10 @@ internal static class NaturalFingeringOptions
             CleanUiEnabled = PlayerPrefs.GetInt(Prefix + nameof(CleanUiEnabled), CleanUiEnabled ? 1 : 0) != 0;
             FoldDownMaxBpm = GetDouble(nameof(FoldDownMaxBpm), FoldDownMaxBpm);
             RaiseUpMaxBpm = GetDouble(nameof(RaiseUpMaxBpm), RaiseUpMaxBpm);
+            EnableRollingOverflowFingering = PlayerPrefs.GetInt(Prefix + nameof(EnableRollingOverflowFingering), EnableRollingOverflowFingering ? 1 : 0) != 0;
+            RollingOverflowStartInputs = GetInt(nameof(RollingOverflowStartInputs), RollingOverflowStartInputs);
+            RollingOverflowMaxKeys = GetInt(nameof(RollingOverflowMaxKeys), RollingOverflowMaxKeys);
+            RollingOverflowUseFeet = PlayerPrefs.GetInt(Prefix + nameof(RollingOverflowUseFeet), RollingOverflowUseFeet ? 1 : 0) != 0;
             EnableFingeringLog = PlayerPrefs.GetInt(Prefix + nameof(EnableFingeringLog), EnableFingeringLog ? 1 : 0) != 0;
             FingeringNormalLogLimit = GetInt(nameof(FingeringNormalLogLimit), FingeringNormalLogLimit);
             FingeringVerboseLogLimit = GetInt(nameof(FingeringVerboseLogLimit), FingeringVerboseLogLimit);
@@ -83,6 +97,10 @@ internal static class NaturalFingeringOptions
             PlayerPrefs.SetInt(Prefix + nameof(CleanUiEnabled), CleanUiEnabled ? 1 : 0);
             SetDouble(nameof(FoldDownMaxBpm), FoldDownMaxBpm);
             SetDouble(nameof(RaiseUpMaxBpm), RaiseUpMaxBpm);
+            PlayerPrefs.SetInt(Prefix + nameof(EnableRollingOverflowFingering), EnableRollingOverflowFingering ? 1 : 0);
+            SetInt(nameof(RollingOverflowStartInputs), RollingOverflowStartInputs);
+            SetInt(nameof(RollingOverflowMaxKeys), RollingOverflowMaxKeys);
+            PlayerPrefs.SetInt(Prefix + nameof(RollingOverflowUseFeet), RollingOverflowUseFeet ? 1 : 0);
             PlayerPrefs.SetString(Prefix + nameof(LogMode), LogMode.ToString());
             PlayerPrefs.SetInt(Prefix + nameof(EnableFingeringLog), EnableFingeringLog ? 1 : 0);
             SetInt(nameof(FingeringNormalLogLimit), FingeringNormalLogLimit);

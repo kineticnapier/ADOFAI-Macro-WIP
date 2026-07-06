@@ -55,7 +55,9 @@ internal static class FingeringPlanner
         FingeringDebugCollector debug = new FingeringDebugCollector(debugLimit);
         int sectionCount = 0;
         int expandedSectionCount = 0;
+        int rollingOverflowSectionCount = 0;
         int maxBucketInputs = 0;
+        int maxRollingKeys = 0;
         double previousRawBpm = ResolveBpm(inputPlan[0], bpmBySeqId, fallbackBpm: 120.0);
         double previousVisualBpm = NormalizeVisualBpm(previousRawBpm);
         int sectionStart = 0;
@@ -96,6 +98,12 @@ internal static class FingeringPlanner
                     expandedSectionCount++;
                 }
 
+                if (stats.RollingOverflow)
+                {
+                    rollingOverflowSectionCount++;
+                    maxRollingKeys = Math.Max(maxRollingKeys, stats.RollingKeyCount);
+                }
+
                 maxBucketInputs = Math.Max(maxBucketInputs, stats.MaxBucketInputs);
 
                 sectionStart = i;
@@ -110,7 +118,7 @@ internal static class FingeringPlanner
         if (enableFingeringLog && NaturalFingeringOptions.ShouldLog(PseudoChordUiLogMode.Minimal))
         {
             log(
-                $"Natural fingering v43 beat-bank plan built. entries={assigned.Length} keys={keys.Length} banks={banks.Count} bankSize={BankSize} sections={sectionCount} expandedSections={expandedSectionCount} maxBucketInputs={maxBucketInputs} lowerBankBuckets={debug.LowerBankBucketCount} oppositeSideBuckets={debug.OppositeSideBucketCount} footBuckets={debug.FootBucketCount} wrappedBuckets={debug.WrappedBucketCount} debugEventsLogged={debug.LoggedCount} debugEventsOmitted={debug.OmittedCount} bpmMapEntries={bpmBySeqId.Count} foldDownMaxBpm={NaturalFingeringOptions.FoldDownMaxBpm:F3} raiseUpMaxBpm={NaturalFingeringOptions.RaiseUpMaxBpm:F3} logMode={NaturalFingeringOptions.LogMode} normalLimit={NaturalFingeringOptions.FingeringNormalLogLimit} verboseLimit={NaturalFingeringOptions.FingeringVerboseLogLimit}");
+                $"Natural fingering v65 rolling-overflow plan built. entries={assigned.Length} keys={keys.Length} banks={banks.Count} bankSize={BankSize} sections={sectionCount} expandedSections={expandedSectionCount} rollingOverflowSections={rollingOverflowSectionCount} maxBucketInputs={maxBucketInputs} maxRollingKeys={maxRollingKeys} lowerBankBuckets={debug.LowerBankBucketCount} oppositeSideBuckets={debug.OppositeSideBucketCount} footBuckets={debug.FootBucketCount} wrappedBuckets={debug.WrappedBucketCount} debugEventsLogged={debug.LoggedCount} debugEventsOmitted={debug.OmittedCount} bpmMapEntries={bpmBySeqId.Count} foldDownMaxBpm={NaturalFingeringOptions.FoldDownMaxBpm:F3} raiseUpMaxBpm={NaturalFingeringOptions.RaiseUpMaxBpm:F3} rollingOverflow={NaturalFingeringOptions.EnableRollingOverflowFingering} rollingStartInputs={NaturalFingeringOptions.RollingOverflowStartInputs} rollingMaxKeys={NaturalFingeringOptions.RollingOverflowMaxKeys} rollingUseFeet={NaturalFingeringOptions.RollingOverflowUseFeet} logMode={NaturalFingeringOptions.LogMode} normalLimit={NaturalFingeringOptions.FingeringNormalLogLimit} verboseLimit={NaturalFingeringOptions.FingeringVerboseLogLimit}");
         }
 
         if (enableFingeringLog && NaturalFingeringOptions.ShouldLog(PseudoChordUiLogMode.Normal))
@@ -134,7 +142,7 @@ internal static class FingeringPlanner
     {
         if (startIndex >= endIndexExclusive)
         {
-            return new SectionStats(false, 0, initialVisualBpm);
+            return new SectionStats(false, 0, initialVisualBpm, false, 0);
         }
 
         double visualBpm = Math.Max(1.0, initialVisualBpm);
@@ -164,6 +172,30 @@ internal static class FingeringPlanner
             buckets = BuildBuckets(source, startIndex, endIndexExclusive, sectionStartTime, visualBpm);
             maxBucketInputs = buckets.Count == 0 ? 0 : buckets.Values.Max(bucket => bucket.TotalInputs);
             expanded = true;
+        }
+
+        int rollingStartInputs = Math.Max(2, NaturalFingeringOptions.RollingOverflowStartInputs);
+        bool useRollingOverflow = NaturalFingeringOptions.EnableRollingOverflowFingering && maxBucketInputs >= rollingStartInputs;
+        if (useRollingOverflow)
+        {
+            string[] rollingKeyOrder = BuildRollingOverflowKeyOrder(
+                buckets.Count == 0 ? 0 : buckets.First().Key,
+                banks,
+                totalKeyCount,
+                maxBucketInputs);
+
+            AssignSectionRollingOverflow(source, assigned, startIndex, endIndexExclusive, rollingKeyOrder);
+            debug.RecordRollingSection(
+                sectionIndex,
+                source[startIndex].FirstSeqId,
+                source[endIndexExclusive - 1].LastSeqId,
+                rawBpm,
+                visualBpm,
+                60000.0 / Math.Max(1.0, visualBpm),
+                maxBucketInputs,
+                rollingKeyOrder.Length,
+                BuildAssignedPreview(rollingKeyOrder, Math.Min(Math.Max(rollingKeyOrder.Length, maxBucketInputs), PreviewAssignedKeys)));
+            return new SectionStats(expanded, maxBucketInputs, visualBpm, true, rollingKeyOrder.Length);
         }
 
         double beatSeconds = 60.0 / Math.Max(1.0, visualBpm);
@@ -200,7 +232,35 @@ internal static class FingeringPlanner
             }
         }
 
-        return new SectionStats(expanded, maxBucketInputs, visualBpm);
+        return new SectionStats(expanded, maxBucketInputs, visualBpm, false, 0);
+    }
+
+    private static void AssignSectionRollingOverflow(
+        IReadOnlyList<InputPlanEntry> source,
+        InputPlanEntry[] assigned,
+        int startIndex,
+        int endIndexExclusive,
+        IReadOnlyList<string> keyOrder)
+    {
+        if (keyOrder.Count == 0)
+        {
+            return;
+        }
+
+        int cursor = 0;
+        for (int entryIndex = startIndex; entryIndex < endIndexExclusive; entryIndex++)
+        {
+            InputPlanEntry entry = source[entryIndex];
+            int count = Math.Max(1, entry.EmittedHitCount);
+            string[] entryKeys = new string[count];
+            for (int i = 0; i < count; i++)
+            {
+                entryKeys[i] = keyOrder[cursor % keyOrder.Count];
+                cursor++;
+            }
+
+            assigned[entryIndex] = CloneWithAssignedKeys(entry, entryKeys);
+        }
     }
 
     private static SortedDictionary<long, BucketState> BuildBuckets(
@@ -316,6 +376,86 @@ internal static class FingeringPlanner
         }
 
         return reasons.Count > 0 ? string.Join("+", reasons) : "upper-only";
+    }
+
+    private static string[] BuildRollingOverflowKeyOrder(
+        long firstBucketIndex,
+        IReadOnlyList<IReadOnlyList<string>> banks,
+        int totalKeyCount,
+        int maxBucketInputs)
+    {
+        bool startRight = PositiveModulo(firstBucketIndex, 2) == 1;
+        List<string> order = new List<string>();
+
+        AddInterleavedBanks(order, banks, 0, 2, startRight); // upper: L/R
+        AddInterleavedBanks(order, banks, 1, 3, startRight); // lower: L/R
+        if (NaturalFingeringOptions.RollingOverflowUseFeet)
+        {
+            AddInterleavedBanks(order, banks, 4, 5, startRight); // foot: L/R
+        }
+
+        if (order.Count == 0)
+        {
+            return FallbackKeys;
+        }
+
+        int targetKeyCount;
+        if (maxBucketInputs <= BankSize * 2)
+        {
+            targetKeyCount = BankSize * 2;
+        }
+        else if (maxBucketInputs <= BankSize * 4 || !NaturalFingeringOptions.RollingOverflowUseFeet)
+        {
+            targetKeyCount = BankSize * 4;
+        }
+        else
+        {
+            targetKeyCount = BankSize * 6;
+        }
+
+        targetKeyCount = Math.Min(targetKeyCount, Math.Max(1, NaturalFingeringOptions.RollingOverflowMaxKeys));
+        targetKeyCount = Math.Min(targetKeyCount, Math.Max(1, totalKeyCount));
+        targetKeyCount = Math.Min(targetKeyCount, order.Count);
+
+        return order.Take(Math.Max(1, targetKeyCount)).ToArray();
+    }
+
+    private static void AddInterleavedBanks(
+        List<string> output,
+        IReadOnlyList<IReadOnlyList<string>> banks,
+        int leftBankIndex,
+        int rightBankIndex,
+        bool startRight)
+    {
+        IReadOnlyList<string> left = leftBankIndex >= 0 && leftBankIndex < banks.Count
+            ? banks[leftBankIndex]
+            : Array.Empty<string>();
+        IReadOnlyList<string> right = rightBankIndex >= 0 && rightBankIndex < banks.Count
+            ? banks[rightBankIndex]
+            : Array.Empty<string>();
+
+        int max = Math.Max(left.Count, right.Count);
+        for (int i = 0; i < max; i++)
+        {
+            if (startRight)
+            {
+                AddIfPresent(output, right, i);
+                AddIfPresent(output, left, i);
+            }
+            else
+            {
+                AddIfPresent(output, left, i);
+                AddIfPresent(output, right, i);
+            }
+        }
+    }
+
+    private static void AddIfPresent(List<string> output, IReadOnlyList<string> keys, int index)
+    {
+        if (index >= 0 && index < keys.Count)
+        {
+            output.Add(keys[index]);
+        }
     }
 
     private static string[] BuildBucketKeyOrder(long bucketIndex, IReadOnlyList<IReadOnlyList<string>> banks)
@@ -525,16 +665,20 @@ internal static class FingeringPlanner
 
     private readonly struct SectionStats
     {
-        public SectionStats(bool expanded, int maxBucketInputs, double finalVisualBpm)
+        public SectionStats(bool expanded, int maxBucketInputs, double finalVisualBpm, bool rollingOverflow, int rollingKeyCount)
         {
             Expanded = expanded;
             MaxBucketInputs = maxBucketInputs;
             FinalVisualBpm = finalVisualBpm;
+            RollingOverflow = rollingOverflow;
+            RollingKeyCount = rollingKeyCount;
         }
 
         public bool Expanded { get; }
         public int MaxBucketInputs { get; }
         public double FinalVisualBpm { get; }
+        public bool RollingOverflow { get; }
+        public int RollingKeyCount { get; }
     }
 
     private sealed class FingeringDebugCollector
@@ -554,6 +698,21 @@ internal static class FingeringPlanner
         public int LoggedCount => events.Count;
         public int OmittedCount { get; private set; }
 
+        public void RecordRollingSection(
+            int sectionIndex,
+            int firstSeqId,
+            int lastSeqId,
+            double rawBpm,
+            double visualBpm,
+            double beatMs,
+            int maxBucketInputs,
+            int rollingKeyCount,
+            string assignedPreview)
+        {
+            Add(
+                $"Natural fingering v65 rolling-overflow. section={sectionIndex} seqID={firstSeqId}-{lastSeqId} rawBpm={rawBpm:F3} visualBpm={visualBpm:F3} beatMs={beatMs:F3} maxBucketInputs={maxBucketInputs} rollingKeys={rollingKeyCount} order={assignedPreview}");
+        }
+
         public void RecordExpansion(
             int sectionIndex,
             int firstSeqId,
@@ -567,7 +726,7 @@ internal static class FingeringPlanner
             int totalKeyCount)
         {
             Add(
-                $"Natural fingering v43 expand. section={sectionIndex} seqID={firstSeqId}-{lastSeqId} rawBpm={rawBpm:F3} visualBpm={beforeVisualBpm:F3} expandedVisualBpm={afterVisualBpm:F3} beatMs={beforeBeatMs:F3}->{afterBeatMs:F3} maxBucketInputs={maxBucketInputs} availableKeys={totalKeyCount}");
+                $"Natural fingering v65 expand. section={sectionIndex} seqID={firstSeqId}-{lastSeqId} rawBpm={rawBpm:F3} visualBpm={beforeVisualBpm:F3} expandedVisualBpm={afterVisualBpm:F3} beatMs={beforeBeatMs:F3}->{afterBeatMs:F3} maxBucketInputs={maxBucketInputs} availableKeys={totalKeyCount}");
         }
 
         public void RecordBucket(
@@ -607,7 +766,7 @@ internal static class FingeringPlanner
             }
 
             Add(
-                $"Natural fingering v43 overflow. section={sectionIndex} bucket={bucketIndex} time={bucketTimeSeconds:F6}s side={side} rawBpm={rawBpm:F3} visualBpm={visualBpm:F3} beatMs={beatMs:F3} inputs={inputCount} assigned={assignedPreview} reason={reason}");
+                $"Natural fingering v65 overflow. section={sectionIndex} bucket={bucketIndex} time={bucketTimeSeconds:F6}s side={side} rawBpm={rawBpm:F3} visualBpm={visualBpm:F3} beatMs={beatMs:F3} inputs={inputCount} assigned={assignedPreview} reason={reason}");
         }
 
         public void Flush(Action<string> log)
@@ -619,7 +778,7 @@ internal static class FingeringPlanner
 
             if (OmittedCount > 0)
             {
-                log($"Natural fingering v43 debug omitted. omittedEvents={OmittedCount} maxLoggedEvents={maxEvents}");
+                log($"Natural fingering v65 debug omitted. omittedEvents={OmittedCount} maxLoggedEvents={maxEvents}");
             }
         }
 
