@@ -19,10 +19,9 @@ internal static class NaturalFingeringOptions
     public static double FoldDownMaxBpm { get; set; } = 1000.0;
     public static double RaiseUpMaxBpm { get; set; } = 500.0;
 
-    // v65: when one visual beat bucket overflows the upper-bank keys, switch that
-    // whole BPM section to a stable chronological rolling order instead of resetting
-    // to the same-side upper bank every beat. This keeps dense / magic-circle parts
-    // looking like two-hand rolling instead of large one-beat key dumps.
+    // v66: when one visual beat bucket overflows the upper-bank keys, switch only
+    // that dense bucket/run to a chronological rolling order instead of making the
+    // whole BPM section rolling. Low-density buckets still use the v43 beat-bank plan.
     public static bool EnableRollingOverflowFingering { get; set; } = true;
     public static int RollingOverflowStartInputs { get; set; } = 5;
     public static int RollingOverflowMaxKeys { get; set; } = 24;
